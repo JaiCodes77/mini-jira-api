@@ -7,12 +7,30 @@ const API_BASE_URL =
 
 const STATUS_OPTIONS = ["open", "in_progress", "closed"];
 const PRIORITY_OPTIONS = ["low", "medium", "high"];
+const SORT_OPTIONS = [
+  { value: "created_at", label: "Created Date" },
+  { value: "id", label: "ID" },
+  { value: "title", label: "Title" },
+  { value: "status", label: "Status" },
+  { value: "priority", label: "Priority" },
+];
+const ORDER_OPTIONS = [
+  { value: "desc", label: "Descending" },
+  { value: "asc", label: "Ascending" },
+];
 
 const INITIAL_FORM_STATE = {
   title: "",
   description: "",
   status: "open",
   priority: "medium",
+};
+const INITIAL_FILTER_STATE = {
+  search: "",
+  status: "all",
+  priority: "all",
+  sortBy: "created_at",
+  order: "desc",
 };
 
 const titleFromEnum = (value) =>
@@ -26,6 +44,35 @@ const formatDate = (value) =>
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+
+const hasFiltersChanged = (candidate, reference) =>
+  candidate.search !== reference.search ||
+  candidate.status !== reference.status ||
+  candidate.priority !== reference.priority ||
+  candidate.sortBy !== reference.sortBy ||
+  candidate.order !== reference.order;
+
+const countActiveFilters = (filters) =>
+  [
+    filters.search.trim() !== "",
+    filters.status !== INITIAL_FILTER_STATE.status,
+    filters.priority !== INITIAL_FILTER_STATE.priority,
+    filters.sortBy !== INITIAL_FILTER_STATE.sortBy,
+    filters.order !== INITIAL_FILTER_STATE.order,
+  ].filter(Boolean).length;
+
+const buildBugsQueryString = (filters) => {
+  const params = new URLSearchParams();
+
+  if (filters.status !== "all") params.set("status", filters.status);
+  if (filters.priority !== "all") params.set("priority", filters.priority);
+  if (filters.search.trim()) params.set("q", filters.search.trim());
+
+  params.set("sort_by", filters.sortBy);
+  params.set("order", filters.order);
+
+  return params.toString();
+};
 
 const spring = { type: "spring", stiffness: 340, damping: 28 };
 
@@ -84,6 +131,8 @@ function App() {
   const [bugs, setBugs] = useState([]);
   const [drafts, setDrafts] = useState({});
   const [form, setForm] = useState(INITIAL_FORM_STATE);
+  const [filterForm, setFilterForm] = useState(INITIAL_FILTER_STATE);
+  const [activeFilters, setActiveFilters] = useState(INITIAL_FILTER_STATE);
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -96,36 +145,72 @@ function App() {
     [bugs],
   );
   const closedBugs = totalBugs - openBugs;
-
-  useEffect(() => {
-    void fetchBugs();
-  }, []);
-
-  const syncDrafts = (list) => {
+  const activeFilterCount = useMemo(
+    () => countActiveFilters(activeFilters),
+    [activeFilters],
+  );
+  const filtersDirty = useMemo(
+    () => hasFiltersChanged(filterForm, activeFilters),
+    [filterForm, activeFilters],
+  );
+  const syncDrafts = useCallback((list) => {
     const nextDrafts = {};
     list.forEach((bug) => {
       nextDrafts[bug.id] = { status: bug.status, priority: bug.priority };
     });
     setDrafts(nextDrafts);
+  }, []);
+
+  const fetchBugs = useCallback(
+    async ({ filtersToUse = activeFilters, showLoading = true } = {}) => {
+      try {
+        if (showLoading) {
+          setLoading(true);
+        }
+
+        const queryString = buildBugsQueryString(filtersToUse);
+        const endpoint = queryString
+          ? `${API_BASE_URL}/bugs?${queryString}`
+          : `${API_BASE_URL}/bugs`;
+
+        const response = await fetch(endpoint);
+        if (!response.ok) {
+          throw new Error("Failed to fetch bugs.");
+        }
+
+        const data = await response.json();
+        setBugs(data);
+        syncDrafts(data);
+      } catch (err) {
+        toast(err.message || "Something went wrong while fetching bugs.", "error");
+      } finally {
+        if (showLoading) {
+          setLoading(false);
+        }
+      }
+    },
+    [activeFilters, syncDrafts],
+  );
+
+  useEffect(() => {
+    void fetchBugs();
+  }, [fetchBugs]);
+
+  const handleFilterFieldChange = useCallback((field, value) => {
+    setFilterForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  }, []);
+
+  const handleApplyFilters = (event) => {
+    event.preventDefault();
+    setActiveFilters({ ...filterForm });
   };
 
-  const fetchBugs = async () => {
-    try {
-      setLoading(true);
-
-      const response = await fetch(`${API_BASE_URL}/bugs`);
-      if (!response.ok) {
-        throw new Error("Failed to fetch bugs.");
-      }
-
-      const data = await response.json();
-      setBugs(data);
-      syncDrafts(data);
-    } catch (err) {
-      toast(err.message || "Something went wrong while fetching bugs.", "error");
-    } finally {
-      setLoading(false);
-    }
+  const handleClearFilters = () => {
+    setFilterForm(INITIAL_FILTER_STATE);
+    setActiveFilters(INITIAL_FILTER_STATE);
   };
 
   const handleCreateBug = async (event) => {
@@ -158,11 +243,8 @@ function App() {
         throw new Error("Failed to create bug.");
       }
 
-      const createdBug = await response.json();
-      const nextBugs = [createdBug, ...bugs];
-
-      setBugs(nextBugs);
-      syncDrafts(nextBugs);
+      await response.json();
+      await fetchBugs({ showLoading: false });
       setForm(INITIAL_FORM_STATE);
       toast("Bug created successfully.");
     } catch (err) {
@@ -211,10 +293,8 @@ function App() {
         throw new Error("Failed to update bug.");
       }
 
-      const updatedBug = await response.json();
-      const nextBugs = bugs.map((bug) => (bug.id === bugId ? updatedBug : bug));
-      setBugs(nextBugs);
-      syncDrafts(nextBugs);
+      await response.json();
+      await fetchBugs({ showLoading: false });
       toast("Bug updated.");
     } catch (err) {
       toast(err.message || "Something went wrong while updating the bug.", "error");
@@ -235,9 +315,7 @@ function App() {
         throw new Error("Failed to delete bug.");
       }
 
-      const nextBugs = bugs.filter((bug) => bug.id !== bugId);
-      setBugs(nextBugs);
-      syncDrafts(nextBugs);
+      await fetchBugs({ showLoading: false });
       toast("Bug deleted.");
     } catch (err) {
       toast(err.message || "Something went wrong while deleting the bug.", "error");
@@ -261,7 +339,7 @@ function App() {
             <span className="eyebrow-dot" />
             Mini Jira
           </p>
-          <h1>Mission Control</h1>
+          <h1>all your tickets at one place</h1>
           <p className="subtitle">
             Track, triage, and resolve — all from one sleek dashboard.
           </p>
@@ -400,10 +478,15 @@ function App() {
               {!loading && (
                 <span className="count-badge">{totalBugs}</span>
               )}
+              {activeFilterCount > 0 && (
+                <span className="count-badge active-filter-badge">
+                  {activeFilterCount} filter{activeFilterCount === 1 ? "" : "s"}
+                </span>
+              )}
             </h2>
             <motion.button
               className="btn subtle"
-              onClick={() => void fetchBugs()}
+              onClick={() => void fetchBugs({ showLoading: true })}
               whileHover={{ scale: 1.04, rotate: 3 }}
               whileTap={{ scale: 0.95 }}
             >
@@ -414,6 +497,108 @@ function App() {
               Refresh
             </motion.button>
           </div>
+
+          <form className="filters-bar" onSubmit={handleApplyFilters}>
+            <label className="compact-field search-field">
+              <span className="label-text">Search</span>
+              <input
+                type="search"
+                placeholder="Search title or description"
+                value={filterForm.search}
+                onChange={(event) =>
+                  handleFilterFieldChange("search", event.target.value)
+                }
+              />
+            </label>
+
+            <label className="compact-field">
+              <span className="label-text">Status</span>
+              <select
+                value={filterForm.status}
+                onChange={(event) =>
+                  handleFilterFieldChange("status", event.target.value)
+                }
+              >
+                <option value="all">All</option>
+                {STATUS_OPTIONS.map((status) => (
+                  <option key={status} value={status}>
+                    {titleFromEnum(status)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="compact-field">
+              <span className="label-text">Priority</span>
+              <select
+                value={filterForm.priority}
+                onChange={(event) =>
+                  handleFilterFieldChange("priority", event.target.value)
+                }
+              >
+                <option value="all">All</option>
+                {PRIORITY_OPTIONS.map((priority) => (
+                  <option key={priority} value={priority}>
+                    {titleFromEnum(priority)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="compact-field">
+              <span className="label-text">Sort By</span>
+              <select
+                value={filterForm.sortBy}
+                onChange={(event) =>
+                  handleFilterFieldChange("sortBy", event.target.value)
+                }
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="compact-field">
+              <span className="label-text">Order</span>
+              <select
+                value={filterForm.order}
+                onChange={(event) =>
+                  handleFilterFieldChange("order", event.target.value)
+                }
+              >
+                {ORDER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="filter-actions">
+              <motion.button
+                className="btn subtle"
+                type="submit"
+                disabled={!filtersDirty}
+                whileHover={{ scale: 1.04 }}
+                whileTap={{ scale: 0.96 }}
+              >
+                Apply
+              </motion.button>
+              <motion.button
+                className="btn ghost"
+                type="button"
+                onClick={handleClearFilters}
+                disabled={activeFilterCount === 0 && !filtersDirty}
+                whileHover={{ scale: 1.04 }}
+                whileTap={{ scale: 0.96 }}
+              >
+                Clear
+              </motion.button>
+            </div>
+          </form>
 
           {loading ? (
             <div className="skeleton-grid">
@@ -439,8 +624,14 @@ function App() {
                   <circle cx="38" cy="14" r="6" fill="var(--accent-primary)" opacity="0.3" />
                 </svg>
               </motion.div>
-              <p className="empty-title">No bugs yet</p>
-              <p className="empty-sub">Create your first issue from the form.</p>
+              <p className="empty-title">
+                {activeFilterCount > 0 ? "No matching bugs" : "No bugs yet"}
+              </p>
+              <p className="empty-sub">
+                {activeFilterCount > 0
+                  ? "Try adjusting the search or filters."
+                  : "Create your first issue from the form."}
+              </p>
             </motion.div>
           ) : (
             <motion.ul
