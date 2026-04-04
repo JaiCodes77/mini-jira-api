@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { API_BASE_URL } from "./apiConfig";
 import { useAuth } from "./AuthContext";
@@ -113,6 +113,15 @@ const PRIORITY_ICONS = {
   high: "↑",
 };
 
+function userInitials(username) {
+  if (!username || typeof username !== "string") return "?";
+  const parts = username.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase().slice(0, 2);
+  }
+  return username.slice(0, 2).toUpperCase();
+}
+
 function SkeletonCard() {
   return (
     <div className="skeleton-card">
@@ -129,6 +138,7 @@ function SkeletonCard() {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const reduceMotion = useReducedMotion();
   const { auth, logout } = useAuth();
   const [bugs, setBugs] = useState([]);
   const [drafts, setDrafts] = useState({});
@@ -137,9 +147,12 @@ export default function Dashboard() {
   const [activeFilters, setActiveFilters] = useState(INITIAL_FILTER_STATE);
 
   const [loading, setLoading] = useState(true);
+  const [listLoadComplete, setListLoadComplete] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [activeBugId, setActiveBugId] = useState(null);
   const [formShake, setFormShake] = useState(false);
+  const [expandedBugId, setExpandedBugId] = useState(null);
 
   const totalBugs = bugs.length;
   const openBugs = useMemo(
@@ -150,6 +163,16 @@ export default function Dashboard() {
   const activeFilterCount = useMemo(
     () => countActiveFilters(activeFilters),
     [activeFilters],
+  );
+
+  const isDraftDirty = useCallback(
+    (bugId) => {
+      const bug = bugs.find((b) => b.id === bugId);
+      const draft = drafts[bugId];
+      if (!bug || !draft) return false;
+      return draft.status !== bug.status || draft.priority !== bug.priority;
+    },
+    [bugs, drafts],
   );
   const filtersDirty = useMemo(
     () => hasFiltersChanged(filterForm, activeFilters),
@@ -192,6 +215,7 @@ export default function Dashboard() {
         if (showLoading) {
           setLoading(true);
         }
+        setFetchError(null);
 
         const queryString = buildBugsQueryString(filtersToUse);
         const endpoint = queryString
@@ -207,11 +231,14 @@ export default function Dashboard() {
         setBugs(data);
         syncDrafts(data);
       } catch (err) {
-        toast(err.message || "Something went wrong while fetching bugs.", "error");
+        const message = err.message || "Something went wrong while fetching bugs.";
+        setFetchError(message);
+        toast(message, "error");
       } finally {
         if (showLoading) {
           setLoading(false);
         }
+        setListLoadComplete(true);
       }
     },
     [activeFilters, syncDrafts],
@@ -242,7 +269,6 @@ export default function Dashboard() {
     event.preventDefault();
 
     if (!form.title.trim()) {
-      toast("Title is required.", "error");
       setFormShake(true);
       setTimeout(() => setFormShake(false), 500);
       return;
@@ -331,6 +357,13 @@ export default function Dashboard() {
   };
 
   const handleDeleteBug = async (bugId) => {
+    if (
+      !window.confirm(
+        "Delete this bug? This cannot be undone.",
+      )
+    ) {
+      return;
+    }
     try {
       setActiveBugId(bugId);
 
@@ -353,91 +386,110 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="app-shell">
+    <div className="dashboard-root">
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
       <div className="mesh-bg" />
 
-      <motion.header
-        className="hero"
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ ...spring, delay: 0.05 }}
-      >
-        <div className="hero-text">
-          <p className="eyebrow">
-            <span className="eyebrow-dot" />
-            Mini Jira
-          </p>
-          <h1>all your tickets at one place</h1>
-          <p className="subtitle">
-            Track, triage, and resolve — all from one sleek dashboard.
-          </p>
-        </div>
-
-        <div className="hero-side">
-          <motion.div
-            className="auth-card auth-card--session hero-user-bar"
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={spring}
-          >
-            <span className="auth-user-label">Signed in</span>
-            <span className="auth-username">{auth?.username}</span>
-            <button type="button" className="btn ghost btn-compact" onClick={handleLogout}>
+      <nav className="app-navbar" aria-label="Main">
+        <div className="app-navbar__inner">
+          <div className="app-navbar__brand">
+            <span className="app-navbar__logo-dot" aria-hidden />
+            <span className="app-navbar__wordmark">MINI JIRA</span>
+          </div>
+          <div className="app-navbar__user">
+            <div className="app-navbar__avatar" aria-hidden>
+              {userInitials(auth?.username)}
+            </div>
+            <span className="app-navbar__username">{auth?.username}</span>
+            <button type="button" className="btn btn-navbar-logout" onClick={handleLogout}>
               Log out
             </button>
-          </motion.div>
-          <motion.div
-            className="stats"
-            initial="hidden"
-            animate="visible"
-            variants={stagger}
-          >
-            <motion.div className="stat-card" variants={fadeSlide}>
-              <span className="stat-label">Total</span>
-              <strong className="stat-value">{totalBugs}</strong>
-            </motion.div>
-            <motion.div className="stat-card accent-primary" variants={fadeSlide}>
-              <span className="stat-label">Open</span>
-              <strong className="stat-value">{openBugs}</strong>
-            </motion.div>
-            <motion.div className="stat-card accent-success" variants={fadeSlide}>
-              <span className="stat-label">Closed</span>
-              <strong className="stat-value">{closedBugs}</strong>
-            </motion.div>
-          </motion.div>
+          </div>
         </div>
-      </motion.header>
+      </nav>
 
-      <main className="layout">
+      <div className="app-shell">
+        <motion.header
+          className="hero hero--tight"
+          initial={reduceMotion ? false : { opacity: 0, y: -12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={reduceMotion ? { duration: 0 } : { ...spring, delay: 0.05 }}
+        >
+          <h1 className="hero__headline">All your tickets in one place</h1>
+          <p className="hero__sub">
+            Track, triage, and resolve — all from one dashboard.
+          </p>
+          {activeFilterCount > 0 && (
+            <p className="hero__sub hero__sub--hint">
+              Numbers below match your active filters.
+            </p>
+          )}
+          <div className="hero-stat-pills" aria-label="Bug counts for the current view">
+            <div className="hero-stat-pill">
+              <span className="hero-stat-pill__label">Total</span>
+              <span className="hero-stat-pill__divider" aria-hidden />
+              <span className="hero-stat-pill__value hero-stat-pill__value--num">
+                {!listLoadComplete && loading ? "—" : totalBugs}
+              </span>
+            </div>
+            <div className="hero-stat-pill hero-stat-pill--open">
+              <span className="hero-stat-pill__label">Open</span>
+              <span className="hero-stat-pill__divider" aria-hidden />
+              <span className="hero-stat-pill__value hero-stat-pill__value--num">
+                {!listLoadComplete && loading ? "—" : openBugs}
+              </span>
+            </div>
+            <div className="hero-stat-pill hero-stat-pill--closed">
+              <span className="hero-stat-pill__label">Closed</span>
+              <span className="hero-stat-pill__divider" aria-hidden />
+              <span className="hero-stat-pill__value hero-stat-pill__value--num">
+                {!listLoadComplete && loading ? "—" : closedBugs}
+              </span>
+            </div>
+          </div>
+        </motion.header>
+
+        <main id="main-content" className="layout" tabIndex={-1}>
         <motion.section
-          className={`panel form-panel ${formShake ? "shake" : ""}`}
-          initial={{ opacity: 0, x: -24 }}
+          className={`panel form-panel form-panel--accent ${formShake ? "shake" : ""}`}
+          initial={reduceMotion ? false : { opacity: 0, x: -24 }}
           animate={{ opacity: 1, x: 0 }}
-          transition={{ ...spring, delay: 0.12 }}
+          transition={reduceMotion ? { duration: 0 } : { ...spring, delay: 0.12 }}
         >
           <h2 className="panel-title">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
               <path d="M8 3v10M3 8h10" stroke="var(--accent-primary)" strokeWidth="1.8" strokeLinecap="round" />
             </svg>
             Create Bug
           </h2>
           <form onSubmit={handleCreateBug} className="bug-form">
             <label>
-              <span className="label-text">Title</span>
+              <span className="label-text label-text--caps">Title</span>
               <input
+                className="input-control"
                 type="text"
                 placeholder="e.g. Login button does nothing"
                 value={form.title}
                 onChange={(event) =>
                   setForm((prev) => ({ ...prev, title: event.target.value }))
                 }
+                aria-invalid={formShake}
+                aria-describedby={formShake ? "create-title-error" : undefined}
                 required
               />
+              {formShake && (
+                <span id="create-title-error" className="field-error" role="alert">
+                  Title is required.
+                </span>
+              )}
             </label>
 
             <label>
-              <span className="label-text">Description</span>
+              <span className="label-text label-text--caps">Description</span>
               <textarea
+                className="input-control input-control--textarea"
                 rows="3"
                 placeholder="Add context for the issue..."
                 value={form.description}
@@ -452,8 +504,9 @@ export default function Dashboard() {
 
             <div className="inline-fields">
               <label>
-                <span className="label-text">Status</span>
+                <span className="label-text label-text--caps">Status</span>
                 <select
+                  className="input-control"
                   value={form.status}
                   onChange={(event) =>
                     setForm((prev) => ({ ...prev, status: event.target.value }))
@@ -468,8 +521,9 @@ export default function Dashboard() {
               </label>
 
               <label>
-                <span className="label-text">Priority</span>
+                <span className="label-text label-text--caps">Priority</span>
                 <select
+                  className="input-control"
                   value={form.priority}
                   onChange={(event) =>
                     setForm((prev) => ({ ...prev, priority: event.target.value }))
@@ -485,11 +539,11 @@ export default function Dashboard() {
             </div>
 
             <motion.button
-              className="btn primary"
+              className="btn primary btn-create-bug"
               type="submit"
               disabled={submitting}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
+              whileHover={reduceMotion ? undefined : { scale: 1.02 }}
+              whileTap={reduceMotion ? undefined : { scale: 0.97 }}
             >
               {submitting ? (
                 <span className="btn-loading">
@@ -504,13 +558,13 @@ export default function Dashboard() {
 
         <motion.section
           className="panel list-panel"
-          initial={{ opacity: 0, x: 24 }}
+          initial={reduceMotion ? false : { opacity: 0, x: 24 }}
           animate={{ opacity: 1, x: 0 }}
-          transition={{ ...spring, delay: 0.18 }}
+          transition={reduceMotion ? { duration: 0 } : { ...spring, delay: 0.18 }}
         >
           <div className="panel-header">
             <h2 className="panel-title">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
                 <rect x="2" y="2" width="5" height="5" rx="1.2" stroke="var(--accent-secondary)" strokeWidth="1.4" />
                 <rect x="9" y="2" width="5" height="5" rx="1.2" stroke="var(--accent-secondary)" strokeWidth="1.4" />
                 <rect x="2" y="9" width="5" height="5" rx="1.2" stroke="var(--accent-secondary)" strokeWidth="1.4" />
@@ -527,24 +581,47 @@ export default function Dashboard() {
               )}
             </h2>
             <motion.button
-              className="btn subtle"
+              type="button"
+              className="btn subtle btn-refresh"
+              disabled={loading}
               onClick={() => void fetchBugs({ showLoading: true })}
-              whileHover={{ scale: 1.04, rotate: 3 }}
-              whileTap={{ scale: 0.95 }}
+              aria-busy={loading}
+              whileHover={reduceMotion ? undefined : { scale: 1.04, rotate: 3 }}
+              whileTap={reduceMotion ? undefined : { scale: 0.95 }}
             >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ marginRight: 4 }}>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ marginRight: 4 }} aria-hidden>
                 <path d="M1.5 7a5.5 5.5 0 0 1 9.9-3.2M12.5 7a5.5 5.5 0 0 1-9.9 3.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
                 <path d="M11.5 1v3h-3M2.5 13v-3h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              Refresh
+              {loading && listLoadComplete ? (
+                <span className="btn-loading">
+                  <span className="spinner sm" aria-hidden /> Refreshing
+                </span>
+              ) : (
+                "Refresh"
+              )}
             </motion.button>
           </div>
 
-          <form className="filters-bar" onSubmit={handleApplyFilters}>
-            <label className="compact-field search-field">
-              <span className="label-text">Search</span>
+          {fetchError && (
+            <div className="list-panel__error" role="alert">
+              <p>{fetchError}</p>
+              <button
+                type="button"
+                className="btn subtle btn-retry"
+                onClick={() => void fetchBugs({ showLoading: true })}
+              >
+                Try again
+              </button>
+            </div>
+          )}
+
+          <form className="filters-bar filters-bar--row" onSubmit={handleApplyFilters}>
+            <label className="filters-bar__search">
+              <span className="visually-hidden">Search</span>
               <input
                 type="search"
+                className="filters-bar__input"
                 placeholder="Search title or description"
                 value={filterForm.search}
                 onChange={(event) =>
@@ -553,15 +630,17 @@ export default function Dashboard() {
               />
             </label>
 
-            <label className="compact-field">
-              <span className="label-text">Status</span>
+            <label className="filters-bar__select-wrap">
+              <span className="visually-hidden">Status</span>
               <select
+                className="filters-bar__select"
                 value={filterForm.status}
                 onChange={(event) =>
                   handleFilterFieldChange("status", event.target.value)
                 }
+                aria-label="Filter by status"
               >
-                <option value="all">All</option>
+                <option value="all">All status</option>
                 {STATUS_OPTIONS.map((status) => (
                   <option key={status} value={status}>
                     {titleFromEnum(status)}
@@ -570,15 +649,17 @@ export default function Dashboard() {
               </select>
             </label>
 
-            <label className="compact-field">
-              <span className="label-text">Priority</span>
+            <label className="filters-bar__select-wrap">
+              <span className="visually-hidden">Priority</span>
               <select
+                className="filters-bar__select"
                 value={filterForm.priority}
                 onChange={(event) =>
                   handleFilterFieldChange("priority", event.target.value)
                 }
+                aria-label="Filter by priority"
               >
-                <option value="all">All</option>
+                <option value="all">All priority</option>
                 {PRIORITY_OPTIONS.map((priority) => (
                   <option key={priority} value={priority}>
                     {titleFromEnum(priority)}
@@ -587,13 +668,15 @@ export default function Dashboard() {
               </select>
             </label>
 
-            <label className="compact-field">
-              <span className="label-text">Sort By</span>
+            <label className="filters-bar__select-wrap">
+              <span className="visually-hidden">Sort by</span>
               <select
+                className="filters-bar__select"
                 value={filterForm.sortBy}
                 onChange={(event) =>
                   handleFilterFieldChange("sortBy", event.target.value)
                 }
+                aria-label="Sort by"
               >
                 {SORT_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -603,13 +686,15 @@ export default function Dashboard() {
               </select>
             </label>
 
-            <label className="compact-field">
-              <span className="label-text">Order</span>
+            <label className="filters-bar__select-wrap filters-bar__select-wrap--narrow">
+              <span className="visually-hidden">Order</span>
               <select
+                className="filters-bar__select"
                 value={filterForm.order}
                 onChange={(event) =>
                   handleFilterFieldChange("order", event.target.value)
                 }
+                aria-label="Sort order"
               >
                 {ORDER_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -619,48 +704,48 @@ export default function Dashboard() {
               </select>
             </label>
 
-            <div className="filter-actions">
+            <div className="filters-bar__actions">
               <motion.button
-                className="btn subtle"
+                className="btn btn-filter-apply"
                 type="submit"
                 disabled={!filtersDirty}
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
+                whileHover={reduceMotion ? undefined : { scale: 1.02 }}
+                whileTap={reduceMotion ? undefined : { scale: 0.98 }}
               >
                 Apply
               </motion.button>
               <motion.button
-                className="btn ghost"
+                className="btn btn-filter-clear"
                 type="button"
                 onClick={handleClearFilters}
                 disabled={activeFilterCount === 0 && !filtersDirty}
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
+                whileHover={reduceMotion ? undefined : { scale: 1.02 }}
+                whileTap={reduceMotion ? undefined : { scale: 0.98 }}
               >
                 Clear
               </motion.button>
             </div>
           </form>
 
-          {loading ? (
+          {loading && !listLoadComplete ? (
             <div className="skeleton-grid">
               {[...Array(3)].map((_, i) => (
                 <SkeletonCard key={i} />
               ))}
             </div>
-          ) : bugs.length === 0 ? (
+          ) : !loading && bugs.length === 0 && !fetchError ? (
             <motion.div
               className="empty-state"
-              initial={{ opacity: 0, scale: 0.94 }}
+              initial={reduceMotion ? false : { opacity: 0, scale: 0.94 }}
               animate={{ opacity: 1, scale: 1 }}
-              transition={spring}
+              transition={reduceMotion ? { duration: 0 } : spring}
             >
               <motion.div
                 className="empty-icon"
-                animate={{ y: [0, -6, 0] }}
+                animate={reduceMotion ? undefined : { y: [0, -6, 0] }}
                 transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
               >
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" aria-hidden>
                   <rect x="8" y="10" width="32" height="28" rx="4" stroke="var(--text-muted)" strokeWidth="1.5" />
                   <path d="M16 22h16M16 28h10" stroke="var(--text-muted)" strokeWidth="1.5" strokeLinecap="round" />
                   <circle cx="38" cy="14" r="6" fill="var(--accent-primary)" opacity="0.3" />
@@ -674,8 +759,17 @@ export default function Dashboard() {
                   ? "Try adjusting the search or filters."
                   : "Create your first issue from the form."}
               </p>
+              {activeFilterCount > 0 && (
+                <button
+                  type="button"
+                  className="btn subtle empty-clear-filters"
+                  onClick={handleClearFilters}
+                >
+                  Clear filters
+                </button>
+              )}
             </motion.div>
-          ) : (
+          ) : bugs.length === 0 && fetchError ? null : (
             <motion.ul
               className="bug-list"
               variants={stagger}
@@ -683,109 +777,176 @@ export default function Dashboard() {
               animate="visible"
             >
               <AnimatePresence mode="popLayout">
-                {bugs.map((bug) => (
+                {bugs.map((bug) => {
+                  const expanded = expandedBugId === bug.id;
+                  return (
                   <motion.li
                     key={bug.id}
-                    className="bug-card"
+                    className={`bug-card ${expanded ? "bug-card--expanded" : ""}`}
                     variants={fadeSlide}
-                    layout
+                    layout={!reduceMotion}
                     exit={{ opacity: 0, scale: 0.92, transition: { duration: 0.2 } }}
-                    whileHover={{ y: -4 }}
+                    whileHover={reduceMotion ? undefined : { y: -2 }}
                   >
                     <div className="card-accent-bar" data-status={bug.status} />
 
-                    <div className="bug-title-row">
-                      <div className="bug-id-title">
-                        <span className="bug-id">#{bug.id}</span>
-                        <h3>{bug.title}</h3>
+                    <div
+                      className="bug-card__main"
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={expanded}
+                      aria-controls={`bug-expand-${bug.id}`}
+                      aria-label={`${expanded ? "Collapse" : "Expand"} ticket #${bug.id}: ${bug.title}`}
+                      onClick={() =>
+                        setExpandedBugId((prev) => (prev === bug.id ? null : bug.id))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setExpandedBugId((prev) => (prev === bug.id ? null : bug.id));
+                        }
+                      }}
+                    >
+                      <div className="bug-title-row">
+                        <div className="bug-id-title">
+                          <span className="bug-id">#{bug.id}</span>
+                          <h3>{bug.title}</h3>
+                        </div>
+                        <span className={`bug-card__chevron ${expanded ? "bug-card__chevron--open" : ""}`} aria-hidden>
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path
+                              d="M4 6l4 4 4-4"
+                              stroke="currentColor"
+                              strokeWidth="1.6"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </span>
+                        <span className={`badge badge--glow status ${bug.status}`}>
+                          <span className="badge-icon">{STATUS_ICONS[bug.status]}</span>
+                          {bug.status === "in_progress" && <span className="pulse-dot" />}
+                          {titleFromEnum(bug.status)}
+                        </span>
                       </div>
-                      <span className={`badge status ${bug.status}`}>
-                        <span className="badge-icon">{STATUS_ICONS[bug.status]}</span>
-                        {bug.status === "in_progress" && <span className="pulse-dot" />}
-                        {titleFromEnum(bug.status)}
-                      </span>
-                    </div>
 
-                    <p className="description">
-                      {bug.description || "No description provided."}
-                    </p>
+                      <p className="description">
+                        {bug.description || "No description provided."}
+                      </p>
 
-                    <div className="meta-row">
-                      <span className={`badge priority ${bug.priority}`}>
-                        <span className="priority-arrow">{PRIORITY_ICONS[bug.priority]}</span>
-                        {titleFromEnum(bug.priority)}
-                      </span>
-                      <span className="meta-date">{formatDate(bug.created_at)}</span>
-                    </div>
-
-                    <div className="inline-fields">
-                      <label>
-                        <span className="label-text">Status</span>
-                        <select
-                          value={drafts[bug.id]?.status ?? bug.status}
-                          onChange={(event) =>
-                            handleDraftChange(bug.id, "status", event.target.value)
-                          }
-                        >
-                          {STATUS_OPTIONS.map((status) => (
-                            <option key={status} value={status}>
-                              {titleFromEnum(status)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label>
-                        <span className="label-text">Priority</span>
-                        <select
-                          value={drafts[bug.id]?.priority ?? bug.priority}
-                          onChange={(event) =>
-                            handleDraftChange(bug.id, "priority", event.target.value)
-                          }
-                        >
-                          {PRIORITY_OPTIONS.map((priority) => (
-                            <option key={priority} value={priority}>
-                              {titleFromEnum(priority)}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-
-                    <div className="actions-row">
-                      <motion.button
-                        className="btn ghost"
-                        onClick={() => void handleSaveBug(bug.id)}
-                        disabled={activeBugId === bug.id}
-                        whileHover={{ scale: 1.04 }}
-                        whileTap={{ scale: 0.95 }}
-                      >
-                        {activeBugId === bug.id ? (
-                          <span className="btn-loading">
-                            <span className="spinner sm" /> Saving...
+                      <div className="meta-row">
+                        <span className={`badge priority ${bug.priority}`}>
+                          <span className="priority-arrow" aria-hidden>
+                            {PRIORITY_ICONS[bug.priority]}
                           </span>
-                        ) : (
-                          "Save"
-                        )}
-                      </motion.button>
-                      <motion.button
-                        className="btn danger"
-                        onClick={() => void handleDeleteBug(bug.id)}
-                        disabled={activeBugId === bug.id}
-                        whileHover={{ scale: 1.04 }}
-                        whileTap={{ scale: 0.95 }}
-                      >
-                        {activeBugId === bug.id ? "..." : "Delete"}
-                      </motion.button>
+                          {titleFromEnum(bug.priority)}
+                        </span>
+                        <span className="meta-date">{formatDate(bug.created_at)}</span>
+                      </div>
+
+                      <p className="bug-card__hint">
+                        {expanded
+                          ? "Click or press Enter to collapse"
+                          : "Click or press Enter to edit status and priority"}
+                      </p>
+                    </div>
+
+                    <div
+                      id={`bug-expand-${bug.id}`}
+                      className={`bug-card__expand ${expanded ? "bug-card__expand--open" : ""}`}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      role="region"
+                      aria-label="Edit status and priority"
+                      inert={expanded ? undefined : true}
+                    >
+                      <div className="bug-card__expand-inner">
+                        <div className="inline-fields">
+                          <label>
+                            <span className="label-text label-text--caps">Status</span>
+                            <select
+                              className="input-control"
+                              value={drafts[bug.id]?.status ?? bug.status}
+                              onChange={(event) =>
+                                handleDraftChange(bug.id, "status", event.target.value)
+                              }
+                            >
+                              {STATUS_OPTIONS.map((status) => (
+                                <option key={status} value={status}>
+                                  {titleFromEnum(status)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label>
+                            <span className="label-text label-text--caps">Priority</span>
+                            <select
+                              className="input-control"
+                              value={drafts[bug.id]?.priority ?? bug.priority}
+                              onChange={(event) =>
+                                handleDraftChange(bug.id, "priority", event.target.value)
+                              }
+                            >
+                              {PRIORITY_OPTIONS.map((priority) => (
+                                <option key={priority} value={priority}>
+                                  {titleFromEnum(priority)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+
+                        <div className="actions-row">
+                          {isDraftDirty(bug.id) && (
+                            <span className="draft-badge">Unsaved changes</span>
+                          )}
+                          <div className="actions-row__btns">
+                            <motion.button
+                              className="btn ghost"
+                              type="button"
+                              onClick={() => void handleSaveBug(bug.id)}
+                              disabled={activeBugId === bug.id}
+                              whileHover={reduceMotion ? undefined : { scale: 1.02 }}
+                              whileTap={reduceMotion ? undefined : { scale: 0.98 }}
+                            >
+                              {activeBugId === bug.id ? (
+                                <span className="btn-loading">
+                                  <span className="spinner sm" /> Saving...
+                                </span>
+                              ) : (
+                                "Save"
+                              )}
+                            </motion.button>
+                            <motion.button
+                              className="btn btn-delete-danger"
+                              type="button"
+                              onClick={() => void handleDeleteBug(bug.id)}
+                              disabled={activeBugId === bug.id}
+                              whileHover={reduceMotion ? undefined : { scale: 1.02 }}
+                              whileTap={reduceMotion ? undefined : { scale: 0.98 }}
+                            >
+                              {activeBugId === bug.id ? (
+                                <span className="btn-loading">
+                                  <span className="spinner sm" /> Deleting...
+                                </span>
+                              ) : (
+                                "Delete"
+                              )}
+                            </motion.button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </motion.li>
-                ))}
+                  );
+                })}
               </AnimatePresence>
             </motion.ul>
           )}
         </motion.section>
       </main>
-
+      </div>
     </div>
   );
 }

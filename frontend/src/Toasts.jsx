@@ -45,16 +45,20 @@ function ToastItem({ toast: t }) {
         ? "toast-info"
         : "toast-success";
 
+  const live = t.variant === "error" ? "assertive" : "polite";
+
   return (
     <motion.div
       layout
+      role={t.variant === "error" ? "alert" : "status"}
+      aria-live={live}
       className={`toast-item ${variantClass}`}
       initial={{ opacity: 0, y: 24, scale: 0.92 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, x: 60, scale: 0.92 }}
       transition={{ type: "spring", stiffness: 380, damping: 26 }}
     >
-      <span className="toast-icon">
+      <span className="toast-icon" aria-hidden>
         {t.variant === "error" ? "✕" : t.variant === "info" ? "●" : "✓"}
       </span>
       <span className="toast-text">{t.text}</span>
