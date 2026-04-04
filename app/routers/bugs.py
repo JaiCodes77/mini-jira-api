@@ -2,15 +2,20 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from app import crud
+from app.auth import get_current_user
 from app.database import get_db
-from app.models import BugPriority, BugStatus
+from app.models import BugPriority, BugStatus, User
 from app.schemas import BugCreate, BugResponse, BugUpdate
 
 router = APIRouter(prefix="/bugs", tags=["bugs"])
 
 
 @router.post("", response_model=BugResponse, status_code=status.HTTP_201_CREATED)
-def create_bug(bug: BugCreate, db: Session = Depends(get_db)):
+def create_bug(
+    bug: BugCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     return crud.create_bug(db=db, bug_in=bug)
 
 
@@ -44,7 +49,12 @@ def list_bugs(
 
 
 @router.patch("/{id}", response_model=BugResponse)
-def update_bug(id: int, bug: BugUpdate, db: Session = Depends(get_db)):
+def update_bug(
+    id: int,
+    bug: BugUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     updated_bug = crud.update_bug(db=db, bug_id=id, bug_in=bug)
     if updated_bug is None:
         raise HTTPException(
@@ -55,7 +65,11 @@ def update_bug(id: int, bug: BugUpdate, db: Session = Depends(get_db)):
 
 
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_bug(id: int, db: Session = Depends(get_db)):
+def delete_bug(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     deleted = crud.delete_bug(db=db, bug_id=id)
     if not deleted:
         raise HTTPException(
