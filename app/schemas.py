@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
@@ -28,7 +28,17 @@ class BugResponse(BaseModel):
     priority: BugPriority
     created_at: datetime
 
-    model_config = ConfigDict(from_attributes=True) 
+    model_config = ConfigDict(from_attributes=True)  
+
+
+#Pagination Schema:-
+T = TypeVar("T")
+
+class PaginatedResponse(BaseModel,Generic[T]):
+    items:list[T]
+    total:int
+    limit:int
+    offset:int
 
 
 #User schema creation:- 

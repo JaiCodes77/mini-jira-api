@@ -5,7 +5,7 @@ from app import crud
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import BugPriority, BugStatus, User
-from app.schemas import BugCreate, BugResponse, BugUpdate
+from app.schemas import BugCreate, BugResponse, BugUpdate, PaginatedResponse
 
 router = APIRouter(prefix="/bugs", tags=["bugs"])
 
@@ -19,7 +19,7 @@ def create_bug(
     return crud.create_bug(db=db, bug_in=bug)
 
 
-@router.get("", response_model=list[BugResponse])
+@router.get("", response_model=PaginatedResponse[BugResponse])
 def list_bugs(
     status: Optional[BugStatus] = Query(default=None, description="Filter by bug status"),
     priority: Optional[BugPriority] = Query(default=None, description="Filter by bug priority"),
@@ -36,15 +36,25 @@ def list_bugs(
         default="desc",
         description="Sort direction",
     ),
+    limit: int = Query(default=20, ge=1, le=100, description="Items per page"),
+    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
     db: Session = Depends(get_db),
-): 
-    return crud.get_bugs(
+):
+    result = crud.get_bugs(
         db=db,
         status=status,
         priority=priority,
         q=q,
         sort_by=sort_by,
         order=order,
+        limit=limit,
+        offset=offset,
+    )
+    return PaginatedResponse(
+        items=result["items"],
+        total=result["total"],
+        limit=limit,
+        offset=offset,
     )
 
 

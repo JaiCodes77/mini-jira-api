@@ -19,16 +19,18 @@ def get_bugs(db: Session, status: Optional[models.BugStatus] = None,
              priority: Optional[models.BugPriority] = None,
              q: Optional[str] = None,
              sort_by: str = "created_at",
-             order: str = "desc"): 
+             order: str = "desc",
+             limit: int = 20,
+             offset: int = 0):
 
-    query = db.query(models.Bug) 
+    query = db.query(models.Bug)
 
     if status is not None:
-        query = query.filter(models.Bug.status == status) 
+        query = query.filter(models.Bug.status == status)
 
     if priority is not None:
-        query = query.filter(models.Bug.priority == priority) 
-    
+        query = query.filter(models.Bug.priority == priority)
+
     if q and q.strip():
         search_term = f"%{q.strip()}%"
         query = query.filter(
@@ -36,24 +38,27 @@ def get_bugs(db: Session, status: Optional[models.BugStatus] = None,
                 models.Bug.title.ilike(search_term),
                 models.Bug.description.ilike(search_term),
             )
-        ) 
-    
+        )
+
     sort_columns = {
         "id" : models.Bug.id,
         "created_at" : models.Bug.created_at,
         "title" : models.Bug.title,
         "status" : models.Bug.status,
         "priority" : models.Bug.priority,
-    } 
+    }
 
-    sort_column = sort_columns.get(sort_by, models.Bug.created_at) 
+    sort_column = sort_columns.get(sort_by, models.Bug.created_at)
 
     if order == "asc":
-        query = query.order_by(sort_column.asc())
+        query = query.order_by(sort_column.asc(), models.Bug.id.asc())
     else:
-        query = query.order_by(sort_column.desc())
-    
-    return query.all()
+        query = query.order_by(sort_column.desc(), models.Bug.id.desc())
+
+    total = query.count()
+    bugs = query.offset(offset).limit(limit).all()
+
+    return {"items": bugs, "total": total} 
 
 
 def update_bug(db: Session, bug_id: int, bug_in: schemas.BugUpdate) -> Optional[models.Bug]:

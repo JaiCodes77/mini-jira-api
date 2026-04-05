@@ -1442,6 +1442,94 @@ select:focus {
 .toast-error .toast-progress { background: var(--accent-danger); }
 .toast-info .toast-progress { background: var(--accent-primary); }
 
+/* ────────────────── pagination ────────────────── */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: var(--space-lg);
+  padding: var(--space-sm) 0;
+  flex-wrap: wrap;
+}
+
+.pagination__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.pagination__btn:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+.pagination__btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.pagination__pages {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pagination__page-btn {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.pagination__page-btn:hover:not(:disabled):not(.pagination__page-btn--active) {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.pagination__page-btn--active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #c7d2fe;
+  cursor: default;
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.12);
+}
+
+.pagination__ellipsis {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 0 4px;
+  user-select: none;
+}
+
+.pagination__info {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
 /* ────────────────── reduced motion ────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -1515,6 +1603,17 @@ select:focus {
   .filters-bar__actions .btn-filter-apply,
   .filters-bar__actions .btn-filter-clear {
     flex: 1;
+  }
+
+  .pagination {
+    gap: 6px;
+  }
+
+  .pagination__info {
+    width: 100%;
+    text-align: center;
+    margin-left: 0;
+    margin-top: 4px;
   }
 
   .toast-container {

@@ -25,6 +25,7 @@ const INITIAL_FORM_STATE = {
   status: "open",
   priority: "medium",
 };
+const PAGE_SIZE = 20;
 const INITIAL_FILTER_STATE = {
   search: "",
   status: "all",
@@ -61,7 +62,7 @@ const countActiveFilters = (filters) =>
     filters.order !== INITIAL_FILTER_STATE.order,
   ].filter(Boolean).length;
 
-const buildBugsQueryString = (filters) => {
+const buildBugsQueryString = (filters, limit, offset) => {
   const params = new URLSearchParams();
 
   if (filters.status !== "all") params.set("status", filters.status);
@@ -70,6 +71,8 @@ const buildBugsQueryString = (filters) => {
 
   params.set("sort_by", filters.sortBy);
   params.set("order", filters.order);
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
 
   return params.toString();
 };
@@ -145,6 +148,8 @@ export default function Dashboard() {
   const [form, setForm] = useState(INITIAL_FORM_STATE);
   const [filterForm, setFilterForm] = useState(INITIAL_FILTER_STATE);
   const [activeFilters, setActiveFilters] = useState(INITIAL_FILTER_STATE);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [totalBugs, setTotalBugs] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [listLoadComplete, setListLoadComplete] = useState(false);
@@ -154,12 +159,12 @@ export default function Dashboard() {
   const [formShake, setFormShake] = useState(false);
   const [expandedBugId, setExpandedBugId] = useState(null);
 
-  const totalBugs = bugs.length;
+  const totalPages = Math.max(1, Math.ceil(totalBugs / PAGE_SIZE));
   const openBugs = useMemo(
     () => bugs.filter((bug) => bug.status !== "closed").length,
     [bugs],
   );
-  const closedBugs = totalBugs - openBugs;
+  const closedBugs = bugs.length - openBugs;
   const activeFilterCount = useMemo(
     () => countActiveFilters(activeFilters),
     [activeFilters],
@@ -210,17 +215,16 @@ export default function Dashboard() {
   );
 
   const fetchBugs = useCallback(
-    async ({ filtersToUse = activeFilters, showLoading = true } = {}) => {
+    async ({ filtersToUse = activeFilters, page = currentPage, showLoading = true } = {}) => {
       try {
         if (showLoading) {
           setLoading(true);
         }
         setFetchError(null);
 
-        const queryString = buildBugsQueryString(filtersToUse);
-        const endpoint = queryString
-          ? `${API_BASE_URL}/bugs?${queryString}`
-          : `${API_BASE_URL}/bugs`;
+        const offset = page * PAGE_SIZE;
+        const queryString = buildBugsQueryString(filtersToUse, PAGE_SIZE, offset);
+        const endpoint = `${API_BASE_URL}/bugs?${queryString}`;
 
         const response = await fetch(endpoint);
         if (!response.ok) {
@@ -228,8 +232,9 @@ export default function Dashboard() {
         }
 
         const data = await response.json();
-        setBugs(data);
-        syncDrafts(data);
+        setBugs(data.items);
+        setTotalBugs(data.total);
+        syncDrafts(data.items);
       } catch (err) {
         const message = err.message || "Something went wrong while fetching bugs.";
         setFetchError(message);
@@ -241,7 +246,7 @@ export default function Dashboard() {
         setListLoadComplete(true);
       }
     },
-    [activeFilters, syncDrafts],
+    [activeFilters, currentPage, syncDrafts],
   );
 
   useEffect(() => {
@@ -257,13 +262,24 @@ export default function Dashboard() {
 
   const handleApplyFilters = (event) => {
     event.preventDefault();
+    setCurrentPage(0);
     setActiveFilters({ ...filterForm });
   };
 
   const handleClearFilters = () => {
+    setCurrentPage(0);
     setFilterForm(INITIAL_FILTER_STATE);
     setActiveFilters(INITIAL_FILTER_STATE);
   };
+
+  const handlePageChange = useCallback(
+    (newPage) => {
+      setCurrentPage(newPage);
+      setExpandedBugId(null);
+      void fetchBugs({ page: newPage, showLoading: true });
+    },
+    [fetchBugs],
+  );
 
   const handleCreateBug = async (event) => {
     event.preventDefault();
@@ -572,7 +588,7 @@ export default function Dashboard() {
               </svg>
               All Bugs
               {!loading && (
-                <span className="count-badge">{totalBugs}</span>
+                <span className="count-badge">{bugs.length}{totalPages > 1 ? ` / ${totalBugs}` : ""}</span>
               )}
               {activeFilterCount > 0 && (
                 <span className="count-badge active-filter-badge">
@@ -770,6 +786,7 @@ export default function Dashboard() {
               )}
             </motion.div>
           ) : bugs.length === 0 && fetchError ? null : (
+            <>
             <motion.ul
               className="bug-list"
               variants={stagger}
@@ -943,6 +960,76 @@ export default function Dashboard() {
                 })}
               </AnimatePresence>
             </motion.ul>
+
+            {totalPages > 1 && (
+              <nav className="pagination" aria-label="Bug list pagination">
+                <button
+                  type="button"
+                  className="btn pagination__btn"
+                  disabled={currentPage === 0 || loading}
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  aria-label="Previous page"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                    <path d="M8.5 3L4.5 7l4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Prev
+                </button>
+
+                <div className="pagination__pages">
+                  {Array.from({ length: totalPages }, (_, i) => {
+                    const show =
+                      i === 0 ||
+                      i === totalPages - 1 ||
+                      Math.abs(i - currentPage) <= 1;
+                    const isEllipsis =
+                      !show &&
+                      (i === currentPage - 2 || i === currentPage + 2);
+
+                    if (isEllipsis) {
+                      return (
+                        <span key={`ellipsis-${i}`} className="pagination__ellipsis">
+                          ...
+                        </span>
+                      );
+                    }
+                    if (!show) return null;
+
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        className={`btn pagination__page-btn ${i === currentPage ? "pagination__page-btn--active" : ""}`}
+                        disabled={loading}
+                        onClick={() => handlePageChange(i)}
+                        aria-label={`Page ${i + 1}`}
+                        aria-current={i === currentPage ? "page" : undefined}
+                      >
+                        {i + 1}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <button
+                  type="button"
+                  className="btn pagination__btn"
+                  disabled={currentPage >= totalPages - 1 || loading}
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  aria-label="Next page"
+                >
+                  Next
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                    <path d="M5.5 3l4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+
+                <span className="pagination__info">
+                  {currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, totalBugs)} of {totalBugs}
+                </span>
+              </nav>
+            )}
+            </>
           )}
         </motion.section>
       </main>
