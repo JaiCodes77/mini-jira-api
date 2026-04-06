@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from app import crud, models
@@ -18,6 +21,20 @@ def _get_bug_or_404(db: Session, bug_id: int) -> models.Bug:
     return bug
 
 
+def _to_comment_response(
+    comment: models.Comment,
+    author_username: str,
+) -> CommentResponse:
+    return CommentResponse(
+        id=cast(int, comment.id),
+        body=cast(str, comment.body),
+        bug_id=cast(int, comment.bug_id),
+        author_id=cast(int, comment.author_id),
+        author_username=author_username,
+        created_at=cast(datetime, comment.created_at),
+    )
+
+
 @router.post("", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
 def create_comment(
     bug_id: int,
@@ -27,15 +44,14 @@ def create_comment(
 ):
     _get_bug_or_404(db, bug_id)
     db_comment = crud.create_comment(
-        db=db, bug_id=bug_id, author_id=current_user.id, comment_in=comment
+        db=db,
+        bug_id=bug_id,
+        author_id=cast(int, current_user.id),
+        comment_in=comment,
     )
-    return CommentResponse(
-        id=db_comment.id,
-        body=db_comment.body,
-        bug_id=db_comment.bug_id,
-        author_id=db_comment.author_id,
-        author_username=current_user.username,
-        created_at=db_comment.created_at,
+    return _to_comment_response(
+        comment=db_comment,
+        author_username=cast(str, current_user.username),
     )
 
 
@@ -51,16 +67,8 @@ def list_comments(
     items = []
     for c in result["items"]:
         author = db.query(models.User).filter(models.User.id == c.author_id).first()
-        items.append(
-            CommentResponse(
-                id=c.id,
-                body=c.body,
-                bug_id=c.bug_id,
-                author_id=c.author_id,
-                author_username=author.username if author else "unknown",
-                created_at=c.created_at,
-            )
-        )
+        author_username = cast(str, author.username) if author else "unknown"
+        items.append(_to_comment_response(comment=c, author_username=author_username))
     return PaginatedResponse(
         items=items,
         total=result["total"],
@@ -86,7 +94,7 @@ def delete_comment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Comment not found",
         )
-    if comment.author_id != current_user.id:
+    if cast(int, comment.author_id) != cast(int, current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the comment author can delete this comment",

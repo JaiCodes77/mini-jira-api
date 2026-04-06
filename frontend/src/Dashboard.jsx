@@ -320,12 +320,16 @@ export default function Dashboard() {
     try {
       setSubmitting(true);
 
+      const effectiveProjectId = form.project_id
+        ? Number(form.project_id)
+        : selectedProjectId;
+
       const payload = {
         title: form.title.trim(),
         description: form.description.trim() || null,
         status: form.status,
         priority: form.priority,
-        ...(form.project_id ? { project_id: Number(form.project_id) } : {}),
+        ...(effectiveProjectId ? { project_id: effectiveProjectId } : {}),
       };
 
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs`, {

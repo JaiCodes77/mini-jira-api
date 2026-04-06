@@ -1,7 +1,6 @@
-from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from app import crud
+from app import crud, models
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import User
@@ -22,8 +21,8 @@ def create_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    existing = db.query(crud.models.Project).filter(
-        crud.models.Project.key == project.key.upper()
+    existing = db.query(models.Project).filter(
+        models.Project.key == project.key.upper()
     ).first()
     if existing:
         raise HTTPException(
