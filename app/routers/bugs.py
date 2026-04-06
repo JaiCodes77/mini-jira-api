@@ -38,6 +38,7 @@ def list_bugs(
     ),
     limit: int = Query(default=20, ge=1, le=100, description="Items per page"),
     offset: int = Query(default=0, ge=0, description="Number of items to skip"),
+    project_id: Optional[int] = Query(default=None, description="Filter by project"),
     db: Session = Depends(get_db),
 ):
     result = crud.get_bugs(
@@ -49,6 +50,7 @@ def list_bugs(
         order=order,
         limit=limit,
         offset=offset,
+        project_id=project_id,
     )
     return PaginatedResponse(
         items=result["items"],

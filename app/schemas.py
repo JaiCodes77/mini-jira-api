@@ -11,6 +11,7 @@ class BugCreate(BaseModel):
     description: Optional[str] = None
     status: BugStatus = BugStatus.open
     priority: BugPriority = BugPriority.medium
+    project_id: Optional[int] = None
 
 
 class BugUpdate(BaseModel):
@@ -26,6 +27,7 @@ class BugResponse(BaseModel):
     description: Optional[str] = None
     status: BugStatus
     priority: BugPriority
+    project_id: Optional[int] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)  
@@ -60,3 +62,40 @@ class UserResponse(BaseModel):
 class Token(BaseModel):
     access_token:str
     token_type:str
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    key: str
+    description: Optional[str] = None
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ProjectResponse(BaseModel):
+    id: int
+    name: str
+    key: str
+    description: Optional[str] = None
+    owner_id: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CommentCreate(BaseModel):
+    body: str
+
+
+class CommentResponse(BaseModel):
+    id: int
+    body: str
+    bug_id: int
+    author_id: int
+    author_username: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

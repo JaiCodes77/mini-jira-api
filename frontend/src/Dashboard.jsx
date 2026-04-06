@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 import { API_BASE_URL } from "./apiConfig";
 import { useAuth } from "./AuthContext";
 import { toast } from "./Toasts";
+import ProjectSidebar from "./ProjectSidebar";
+import CommentThread from "./CommentThread";
 
 const STATUS_OPTIONS = ["open", "in_progress", "closed"];
 const PRIORITY_OPTIONS = ["low", "medium", "high"];
@@ -24,6 +26,7 @@ const INITIAL_FORM_STATE = {
   description: "",
   status: "open",
   priority: "medium",
+  project_id: "",
 };
 const PAGE_SIZE = 20;
 const INITIAL_FILTER_STATE = {
@@ -62,12 +65,13 @@ const countActiveFilters = (filters) =>
     filters.order !== INITIAL_FILTER_STATE.order,
   ].filter(Boolean).length;
 
-const buildBugsQueryString = (filters, limit, offset) => {
+const buildBugsQueryString = (filters, limit, offset, projectId) => {
   const params = new URLSearchParams();
 
   if (filters.status !== "all") params.set("status", filters.status);
   if (filters.priority !== "all") params.set("priority", filters.priority);
   if (filters.search.trim()) params.set("q", filters.search.trim());
+  if (projectId != null) params.set("project_id", String(projectId));
 
   params.set("sort_by", filters.sortBy);
   params.set("order", filters.order);
@@ -151,6 +155,9 @@ export default function Dashboard() {
   const [currentPage, setCurrentPage] = useState(0);
   const [totalBugs, setTotalBugs] = useState(0);
 
+  const [selectedProjectId, setSelectedProjectId] = useState(null);
+  const [projectsForDropdown, setProjectsForDropdown] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [listLoadComplete, setListLoadComplete] = useState(false);
   const [fetchError, setFetchError] = useState(null);
@@ -215,7 +222,7 @@ export default function Dashboard() {
   );
 
   const fetchBugs = useCallback(
-    async ({ filtersToUse = activeFilters, page = currentPage, showLoading = true } = {}) => {
+    async ({ filtersToUse = activeFilters, page = currentPage, showLoading = true, projectId = selectedProjectId } = {}) => {
       try {
         if (showLoading) {
           setLoading(true);
@@ -223,7 +230,7 @@ export default function Dashboard() {
         setFetchError(null);
 
         const offset = page * PAGE_SIZE;
-        const queryString = buildBugsQueryString(filtersToUse, PAGE_SIZE, offset);
+        const queryString = buildBugsQueryString(filtersToUse, PAGE_SIZE, offset, projectId);
         const endpoint = `${API_BASE_URL}/bugs?${queryString}`;
 
         const response = await fetch(endpoint);
@@ -246,12 +253,32 @@ export default function Dashboard() {
         setListLoadComplete(true);
       }
     },
-    [activeFilters, currentPage, syncDrafts],
+    [activeFilters, currentPage, selectedProjectId, syncDrafts],
   );
 
   useEffect(() => {
     void fetchBugs();
   }, [fetchBugs]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/projects?limit=100&offset=0`);
+        if (response.ok) {
+          const data = await response.json();
+          setProjectsForDropdown(data.items);
+        }
+      } catch {
+        // non-critical — dropdown will just be empty
+      }
+    })();
+  }, []);
+
+  const handleSelectProject = useCallback((projectId) => {
+    setSelectedProjectId(projectId);
+    setCurrentPage(0);
+    setExpandedBugId(null);
+  }, []);
 
   const handleFilterFieldChange = useCallback((field, value) => {
     setFilterForm((prev) => ({
@@ -298,6 +325,7 @@ export default function Dashboard() {
         description: form.description.trim() || null,
         status: form.status,
         priority: form.priority,
+        ...(form.project_id ? { project_id: Number(form.project_id) } : {}),
       };
 
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs`, {
@@ -426,6 +454,14 @@ export default function Dashboard() {
         </div>
       </nav>
 
+      <div className="dashboard-content">
+        <ProjectSidebar
+          auth={auth}
+          fetchWithAuth={fetchWithAuth}
+          selectedProjectId={selectedProjectId}
+          onSelectProject={handleSelectProject}
+        />
+        <div className="dashboard-main">
       <div className="app-shell">
         <motion.header
           className="hero hero--tight"
@@ -553,6 +589,26 @@ export default function Dashboard() {
                 </select>
               </label>
             </div>
+
+            {projectsForDropdown.length > 0 && (
+              <label>
+                <span className="label-text label-text--caps">Project</span>
+                <select
+                  className="input-control"
+                  value={form.project_id}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, project_id: event.target.value }))
+                  }
+                >
+                  <option value="">None</option>
+                  {projectsForDropdown.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.key} — {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
 
             <motion.button
               className="btn primary btn-create-bug"
@@ -953,6 +1009,14 @@ export default function Dashboard() {
                             </motion.button>
                           </div>
                         </div>
+
+                        {expanded && (
+                          <CommentThread
+                            bugId={bug.id}
+                            auth={auth}
+                            fetchWithAuth={fetchWithAuth}
+                          />
+                        )}
                       </div>
                     </div>
                   </motion.li>
@@ -1033,6 +1097,8 @@ export default function Dashboard() {
           )}
         </motion.section>
       </main>
+      </div>
+      </div>
       </div>
     </div>
   );

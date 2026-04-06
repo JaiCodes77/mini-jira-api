@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import Base, engine
 from app.routers.auth import router as auth_router
 from app.routers.bugs import router as bugs_router
+from app.routers.projects import router as projects_router
+from app.routers.comments import router as comments_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -26,6 +28,8 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(bugs_router)
+app.include_router(projects_router)
+app.include_router(comments_router)
 
 
 @app.get("/", tags=["health"])
