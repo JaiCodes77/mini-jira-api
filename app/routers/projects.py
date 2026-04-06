@@ -1,3 +1,5 @@
+from typing import cast
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from app import crud, models
@@ -29,7 +31,11 @@ def create_project(
             status_code=status.HTTP_409_CONFLICT,
             detail="Project key already exists",
         )
-    return crud.create_project(db=db, project_in=project, owner_id=current_user.id)
+    return crud.create_project(
+        db=db,
+        project_in=project,
+        owner_id=cast(int, current_user.id),
+    )
 
 
 @router.get("", response_model=PaginatedResponse[ProjectResponse])
@@ -74,7 +80,7 @@ def update_project(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found",
         )
-    if existing.owner_id != current_user.id:
+    if cast(int, existing.owner_id) != cast(int, current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the project owner can update this project",
@@ -95,7 +101,7 @@ def delete_project(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found",
         )
-    if existing.owner_id != current_user.id:
+    if cast(int, existing.owner_id) != cast(int, current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the project owner can delete this project",
