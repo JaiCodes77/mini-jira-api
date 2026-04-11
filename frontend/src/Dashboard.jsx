@@ -109,7 +109,7 @@ const STATUS_ICONS = {
   closed: (
     <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
       <circle cx="5" cy="5" r="4" fill="var(--accent-success)" />
-      <path d="M3.2 5.2 L4.5 6.5 L7 3.8" stroke="#0a0a0f" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3.2 5.2 L4.5 6.5 L7 3.8" stroke="var(--btn-on-primary)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
 };
