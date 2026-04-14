@@ -1,13 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database import Base, engine
+from app.database import init_db
 from app.routers.auth import router as auth_router
 from app.routers.bugs import router as bugs_router
-from app.routers.projects import router as projects_router
 from app.routers.comments import router as comments_router
+from app.routers.notifications import router as notifications_router
+from app.routers.projects import router as projects_router
 
-Base.metadata.create_all(bind=engine)
+init_db()
 
 app = FastAPI(
     title="Mini Jira Bug Tracker API",
@@ -30,6 +31,7 @@ app.include_router(auth_router)
 app.include_router(bugs_router)
 app.include_router(projects_router)
 app.include_router(comments_router)
+app.include_router(notifications_router)
 
 
 @app.get("/", tags=["health"])

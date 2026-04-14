@@ -63,6 +63,8 @@ async def test_login_success(client):
     data = resp.json()
     assert "access_token" in data
     assert data["token_type"] == "bearer"
+    assert isinstance(data["user_id"], int)
+    assert data["username"] == "login_ok_user"
 
 
 async def test_login_wrong_password(client):

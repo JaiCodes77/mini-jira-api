@@ -1,33 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { API_BASE_URL } from "./apiConfig";
 import { toast } from "./Toasts";
 
 const INITIAL_PROJECT_FORM = { name: "", key: "", description: "" };
 
-export default function ProjectSidebar({ auth, fetchWithAuth, selectedProjectId, onSelectProject }) {
-  const [projects, setProjects] = useState([]);
-  const [loading, setLoading] = useState(true);
+export default function ProjectSidebar({
+  projects,
+  fetchWithAuth,
+  selectedProjectId,
+  onSelectProject,
+  onProjectsChange,
+}) {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(INITIAL_PROJECT_FORM);
   const [submitting, setSubmitting] = useState(false);
-
-  const fetchProjects = useCallback(async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/projects?limit=100&offset=0`);
-      if (!response.ok) throw new Error("Failed to fetch projects.");
-      const data = await response.json();
-      setProjects(data.items);
-    } catch (err) {
-      toast(err.message || "Could not load projects.", "error");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchProjects();
-  }, [fetchProjects]);
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -56,7 +42,7 @@ export default function ProjectSidebar({ auth, fetchWithAuth, selectedProjectId,
         throw new Error(body?.detail || "Failed to create project.");
       }
 
-      await fetchProjects();
+      await onProjectsChange();
       setForm(INITIAL_PROJECT_FORM);
       setShowCreate(false);
       toast("Project created.");
@@ -64,6 +50,59 @@ export default function ProjectSidebar({ auth, fetchWithAuth, selectedProjectId,
       toast(err.message || "Something went wrong.", "error");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const activeProject = projects.find((project) => project.id === selectedProjectId) || null;
+
+  const handleEditProject = async () => {
+    if (!activeProject) return;
+    const name = window.prompt("Project name", activeProject.name);
+    if (name === null) return;
+    const key = window.prompt("Project key", activeProject.key);
+    if (key === null) return;
+    const description = window.prompt("Project description", activeProject.description || "");
+    if (description === null) return;
+
+    try {
+      const response = await fetchWithAuth(`${API_BASE_URL}/projects/${activeProject.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          key: key.trim().toUpperCase(),
+          description: description.trim() || null,
+        }),
+      });
+      if (!response.ok) {
+        if (response.status === 401) return;
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail || "Failed to update project.");
+      }
+      await onProjectsChange();
+      toast("Project updated.");
+    } catch (err) {
+      toast(err.message || "Something went wrong.", "error");
+    }
+  };
+
+  const handleDeleteProject = async () => {
+    if (!activeProject) return;
+    if (!window.confirm(`Delete ${activeProject.name}? This removes all related data.`)) return;
+    try {
+      const response = await fetchWithAuth(`${API_BASE_URL}/projects/${activeProject.id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        if (response.status === 401) return;
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail || "Failed to delete project.");
+      }
+      await onProjectsChange();
+      onSelectProject(null);
+      toast("Project deleted.");
+    } catch (err) {
+      toast(err.message || "Something went wrong.", "error");
     }
   };
 
@@ -78,14 +117,8 @@ export default function ProjectSidebar({ auth, fetchWithAuth, selectedProjectId,
         onClick={() => onSelectProject(null)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelectProject(null); } }}
       >
-        All bugs
+        All issues
       </div>
-
-      {loading && projects.length === 0 && (
-        <span className="project-sidebar__item" style={{ opacity: 0.5, cursor: "default" }}>
-          Loading…
-        </span>
-      )}
 
       {projects.map((project) => (
         <div
@@ -100,6 +133,25 @@ export default function ProjectSidebar({ auth, fetchWithAuth, selectedProjectId,
           {project.name}
         </div>
       ))}
+
+      {activeProject && (
+        <div className="project-sidebar__actions">
+          <button
+            type="button"
+            className="btn subtle btn-compact"
+            onClick={() => void handleEditProject()}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className="btn subtle btn-compact"
+            onClick={() => void handleDeleteProject()}
+          >
+            Delete
+          </button>
+        </div>
+      )}
 
       <div className="project-sidebar__create">
         {!showCreate ? (

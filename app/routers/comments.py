@@ -1,18 +1,16 @@
-from datetime import datetime
-from typing import cast
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from app import crud, models
+
+from app import crud, models, serializers
 from app.auth import get_current_user
 from app.database import get_db
-from app.schemas import CommentCreate, CommentResponse, PaginatedResponse
+from app.schemas import CommentCreate, CommentResponse, CommentUpdate, PaginatedResponse
 
 router = APIRouter(prefix="/bugs/{bug_id}/comments", tags=["comments"])
 
 
 def _get_bug_or_404(db: Session, bug_id: int) -> models.Bug:
-    bug = db.query(models.Bug).filter(models.Bug.id == bug_id).first()
+    bug = crud.get_bug(db, bug_id, detail=True)
     if bug is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -21,17 +19,14 @@ def _get_bug_or_404(db: Session, bug_id: int) -> models.Bug:
     return bug
 
 
-def _to_comment_response(
-    comment: models.Comment,
-    author_username: str,
-) -> CommentResponse:
-    return CommentResponse(
-        id=cast(int, comment.id),
-        body=cast(str, comment.body),
-        bug_id=cast(int, comment.bug_id),
-        author_id=cast(int, comment.author_id),
-        author_username=author_username,
-        created_at=cast(datetime, comment.created_at),
+def _ensure_comment_access(comment: models.Comment, bug: models.Bug, current_user: models.User):
+    if comment.author_id == current_user.id:
+        return
+    if bug.project is not None and bug.project.owner_id == current_user.id:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have permission to modify this comment",
     )
 
 
@@ -42,17 +37,14 @@ def create_comment(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    _get_bug_or_404(db, bug_id)
-    db_comment = crud.create_comment(
+    bug = _get_bug_or_404(db, bug_id)
+    created = crud.create_comment(
         db=db,
-        bug_id=bug_id,
-        author_id=cast(int, current_user.id),
+        bug=bug,
+        author=current_user,
         comment_in=comment,
     )
-    return _to_comment_response(
-        comment=db_comment,
-        author_username=cast(str, current_user.username),
-    )
+    return serializers.serialize_comment(created)
 
 
 @router.get("", response_model=PaginatedResponse[CommentResponse])
@@ -64,17 +56,38 @@ def list_comments(
 ):
     _get_bug_or_404(db, bug_id)
     result = crud.get_comments(db=db, bug_id=bug_id, limit=limit, offset=offset)
-    items = []
-    for c in result["items"]:
-        author = db.query(models.User).filter(models.User.id == c.author_id).first()
-        author_username = cast(str, author.username) if author else "unknown"
-        items.append(_to_comment_response(comment=c, author_username=author_username))
     return PaginatedResponse(
-        items=items,
+        items=[serializers.serialize_comment(comment) for comment in result["items"]],
         total=result["total"],
         limit=limit,
         offset=offset,
     )
+
+
+@router.patch("/{comment_id}", response_model=CommentResponse)
+def update_comment(
+    bug_id: int,
+    comment_id: int,
+    comment_in: CommentUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    bug = _get_bug_or_404(db, bug_id)
+    comment = crud.get_comment(db=db, bug_id=bug_id, comment_id=comment_id)
+    if comment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Comment not found",
+        )
+    _ensure_comment_access(comment, bug, current_user)
+    updated = crud.update_comment(
+        db=db,
+        bug=bug,
+        comment=comment,
+        author=current_user,
+        comment_in=comment_in,
+    )
+    return serializers.serialize_comment(updated)
 
 
 @router.delete("/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -84,20 +97,13 @@ def delete_comment(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    _get_bug_or_404(db, bug_id)
-    comment = db.query(models.Comment).filter(
-        models.Comment.id == comment_id,
-        models.Comment.bug_id == bug_id,
-    ).first()
+    bug = _get_bug_or_404(db, bug_id)
+    comment = crud.get_comment(db=db, bug_id=bug_id, comment_id=comment_id)
     if comment is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Comment not found",
         )
-    if cast(int, comment.author_id) != cast(int, current_user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the comment author can delete this comment",
-        )
-    crud.delete_comment(db=db, comment_id=comment_id)
+    _ensure_comment_access(comment, bug, current_user)
+    crud.delete_comment(db=db, bug=bug, comment=comment, actor_id=current_user.id)
     return None

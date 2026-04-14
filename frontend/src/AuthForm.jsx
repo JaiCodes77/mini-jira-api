@@ -48,7 +48,8 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
       const data = await response.json();
       onAuthenticated({
         token: data.access_token,
-        username: username.trim(),
+        username: data.username || username.trim(),
+        user_id: data.user_id,
       });
       setPassword("");
       toast("Signed in successfully.");
@@ -100,7 +101,8 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
       const data = await loginRes.json();
       onAuthenticated({
         token: data.access_token,
-        username: username.trim(),
+        username: data.username || username.trim(),
+        user_id: data.user_id,
       });
       setPassword("");
       toast("Account created. You're signed in.");

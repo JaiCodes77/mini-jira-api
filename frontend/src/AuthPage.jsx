@@ -35,7 +35,7 @@ export default function AuthPage() {
         </p>
         <h1>Welcome back</h1>
         <p className="subtitle">
-          Sign in or create an account to manage your bugs.
+          Sign in or create an account to manage projects and issues.
         </p>
       </motion.header>
 
