@@ -1,38 +1,45 @@
 import { useMemo, useState } from "react";
+import Modal from "./components/Modal";
 import { API_BASE_URL } from "./apiConfig";
 import { toast } from "./Toasts";
 
 const INITIAL_FORMS = {
   epic: { name: "", description: "" },
   sprint: { name: "", goal: "", state: "planned", start_at: "", end_at: "" },
-  label: { name: "", color: "#7C3AED" },
+  label: { name: "", color: "#a1a1aa" },
   component: { name: "", description: "" },
   version: { name: "", description: "", is_released: false, released_at: "" },
 };
 
+const TABS = [
+  { id: "epics", label: "Epics", section: "epic", path: "epics" },
+  { id: "sprints", label: "Sprints", section: "sprint", path: "sprints" },
+  { id: "labels", label: "Labels", section: "label", path: "labels" },
+  { id: "components", label: "Components", section: "component", path: "components" },
+  { id: "versions", label: "Versions", section: "version", path: "versions" },
+];
+
 const toDayStart = (value) => (value ? `${value}T00:00:00` : null);
 
-function CatalogList({ title, items, renderItem, emptyText }) {
-  return (
-    <div className="catalog-card">
-      <div className="catalog-card__header">
-        <strong>{title}</strong>
-        <span>{items.length}</span>
-      </div>
-      {items.length === 0 ? (
-        <p className="catalog-card__empty">{emptyText}</p>
-      ) : (
-        <ul className="catalog-card__list">
-          {items.map(renderItem)}
-        </ul>
-      )}
-    </div>
-  );
-}
+const formatDateShort = (value) => {
+  if (!value) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(new Date(value));
+  } catch {
+    return null;
+  }
+};
 
-export default function ProjectCatalogManager({ project, catalog, fetchWithAuth, onCatalogChange }) {
+export default function ProjectCatalogModal({
+  project,
+  catalog,
+  fetchWithAuth,
+  onCatalogChange,
+  onClose,
+}) {
   const [forms, setForms] = useState(INITIAL_FORMS);
   const [busySection, setBusySection] = useState(null);
+  const [activeTab, setActiveTab] = useState("epics");
 
   const scopedBase = useMemo(
     () => `${API_BASE_URL}/projects/${project.id}`,
@@ -40,17 +47,11 @@ export default function ProjectCatalogManager({ project, catalog, fetchWithAuth,
   );
 
   const updateForm = (section, patch) => {
-    setForms((prev) => ({
-      ...prev,
-      [section]: { ...prev[section], ...patch },
-    }));
+    setForms((prev) => ({ ...prev, [section]: { ...prev[section], ...patch } }));
   };
 
   const resetForm = (section) => {
-    setForms((prev) => ({
-      ...prev,
-      [section]: INITIAL_FORMS[section],
-    }));
+    setForms((prev) => ({ ...prev, [section]: INITIAL_FORMS[section] }));
   };
 
   const createRecord = async (section, path, payload) => {
@@ -93,315 +94,431 @@ export default function ProjectCatalogManager({ project, catalog, fetchWithAuth,
     }
   };
 
-  return (
-    <section className="panel project-catalog-panel">
-      <div className="project-catalog-panel__header">
-        <div>
-          <h2 className="panel-title">Project Planning Surface</h2>
-          <p className="project-catalog-panel__sub">
-            Manage epics, sprints, labels, components, and release versions for{" "}
-            <strong>{project.key}</strong>.
-          </p>
-        </div>
-      </div>
-
-      <div className="catalog-grid">
-        <div className="catalog-section">
-          <CatalogList
-            title="Epics"
-            items={catalog.epics}
-            emptyText="No epics yet."
-            renderItem={(item) => (
-              <li key={item.id} className="catalog-card__item">
-                <div>
-                  <strong>{item.name}</strong>
-                  {item.description && <p>{item.description}</p>}
+  const renderList = () => {
+    if (activeTab === "epics") {
+      return (
+        <ul className="catalog-section__list">
+          {catalog.epics.length === 0 && <EmptyState label="No epics yet." />}
+          {catalog.epics.map((item) => (
+            <li key={item.id} className="catalog-item">
+              <div className="catalog-item__main">
+                <div className="catalog-item__title">{item.name}</div>
+                {item.description && <div className="catalog-item__sub">{item.description}</div>}
+              </div>
+              <DeleteButton onClick={() => void deleteRecord("epics", item.id, item.name)} />
+            </li>
+          ))}
+        </ul>
+      );
+    }
+    if (activeTab === "sprints") {
+      return (
+        <ul className="catalog-section__list">
+          {catalog.sprints.length === 0 && <EmptyState label="No sprints yet." />}
+          {catalog.sprints.map((item) => {
+            const start = formatDateShort(item.start_at);
+            const end = formatDateShort(item.end_at);
+            return (
+              <li key={item.id} className="catalog-item">
+                <div className="catalog-item__main">
+                  <div className="catalog-item__title">
+                    {item.name}
+                    <span className={`tag tag--status-${item.state}`} style={{ marginLeft: 6 }}>
+                      {item.state}
+                    </span>
+                  </div>
+                  {item.goal && <div className="catalog-item__sub">{item.goal}</div>}
+                  {(start || end) && (
+                    <div className="catalog-item__sub">
+                      {start || "—"} → {end || "—"}
+                    </div>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  className="btn subtle btn-compact"
-                  onClick={() => void deleteRecord("epics", item.id, item.name)}
-                >
-                  Delete
-                </button>
+                <DeleteButton onClick={() => void deleteRecord("sprints", item.id, item.name)} />
               </li>
-            )}
-          />
-          <div className="catalog-form">
+            );
+          })}
+        </ul>
+      );
+    }
+    if (activeTab === "labels") {
+      return (
+        <ul className="catalog-section__list">
+          {catalog.labels.length === 0 && <EmptyState label="No labels yet." />}
+          {catalog.labels.map((item) => (
+            <li key={item.id} className="catalog-item">
+              <div className="catalog-item__main">
+                <div className="catalog-item__title">
+                  <span
+                    className="tag__swatch"
+                    style={{ background: item.color }}
+                    aria-hidden
+                  />
+                  {item.name}
+                </div>
+              </div>
+              <DeleteButton onClick={() => void deleteRecord("labels", item.id, item.name)} />
+            </li>
+          ))}
+        </ul>
+      );
+    }
+    if (activeTab === "components") {
+      return (
+        <ul className="catalog-section__list">
+          {catalog.components.length === 0 && <EmptyState label="No components yet." />}
+          {catalog.components.map((item) => (
+            <li key={item.id} className="catalog-item">
+              <div className="catalog-item__main">
+                <div className="catalog-item__title">{item.name}</div>
+                {item.description && <div className="catalog-item__sub">{item.description}</div>}
+              </div>
+              <DeleteButton onClick={() => void deleteRecord("components", item.id, item.name)} />
+            </li>
+          ))}
+        </ul>
+      );
+    }
+    if (activeTab === "versions") {
+      return (
+        <ul className="catalog-section__list">
+          {catalog.versions.length === 0 && <EmptyState label="No release versions yet." />}
+          {catalog.versions.map((item) => (
+            <li key={item.id} className="catalog-item">
+              <div className="catalog-item__main">
+                <div className="catalog-item__title">
+                  {item.name}
+                  <span className="tag tag--muted" style={{ marginLeft: 6 }}>
+                    {item.is_released ? "Released" : "Planned"}
+                  </span>
+                </div>
+                {item.description && <div className="catalog-item__sub">{item.description}</div>}
+              </div>
+              <DeleteButton onClick={() => void deleteRecord("versions", item.id, item.name)} />
+            </li>
+          ))}
+        </ul>
+      );
+    }
+    return null;
+  };
+
+  const renderForm = () => {
+    if (activeTab === "epics") {
+      const f = forms.epic;
+      return (
+        <div className="catalog-form">
+          <div className="catalog-form__title">New epic</div>
+          <label className="field">
+            <span className="field__label">Name</span>
             <input
-              className="input-control"
-              placeholder="Epic name"
-              value={forms.epic.name}
+              className="input"
+              placeholder="e.g. Onboarding"
+              value={f.name}
               onChange={(e) => updateForm("epic", { name: e.target.value })}
             />
+          </label>
+          <label className="field">
+            <span className="field__label">Description</span>
             <textarea
-              className="input-control input-control--textarea"
-              rows="2"
-              placeholder="Epic description"
-              value={forms.epic.description}
+              className="textarea"
+              rows={3}
+              placeholder="Optional goal or summary"
+              value={f.description}
               onChange={(e) => updateForm("epic", { description: e.target.value })}
             />
-            <button
-              type="button"
-              className="btn primary"
-              disabled={busySection === "epic" || !forms.epic.name.trim()}
-              onClick={() =>
-                void createRecord("epic", "epics", {
-                  name: forms.epic.name.trim(),
-                  description: forms.epic.description.trim() || null,
-                })
-              }
-            >
-              {busySection === "epic" ? "Creating..." : "Add epic"}
-            </button>
-          </div>
+          </label>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busySection === "epic" || !f.name.trim()}
+            onClick={() =>
+              void createRecord("epic", "epics", {
+                name: f.name.trim(),
+                description: f.description.trim() || null,
+              })
+            }
+          >
+            {busySection === "epic" ? "Creating…" : "Add epic"}
+          </button>
         </div>
-
-        <div className="catalog-section">
-          <CatalogList
-            title="Sprints"
-            items={catalog.sprints}
-            emptyText="No sprints yet."
-            renderItem={(item) => (
-              <li key={item.id} className="catalog-card__item">
-                <div>
-                  <strong>{item.name}</strong>
-                  <p>{item.state}</p>
-                </div>
-                <button
-                  type="button"
-                  className="btn subtle btn-compact"
-                  onClick={() => void deleteRecord("sprints", item.id, item.name)}
-                >
-                  Delete
-                </button>
-              </li>
-            )}
-          />
-          <div className="catalog-form">
+      );
+    }
+    if (activeTab === "sprints") {
+      const f = forms.sprint;
+      return (
+        <div className="catalog-form">
+          <div className="catalog-form__title">New sprint</div>
+          <label className="field">
+            <span className="field__label">Name</span>
             <input
-              className="input-control"
-              placeholder="Sprint name"
-              value={forms.sprint.name}
+              className="input"
+              placeholder="e.g. Sprint 12"
+              value={f.name}
               onChange={(e) => updateForm("sprint", { name: e.target.value })}
             />
+          </label>
+          <label className="field">
+            <span className="field__label">Goal</span>
             <textarea
-              className="input-control input-control--textarea"
-              rows="2"
+              className="textarea"
+              rows={2}
               placeholder="Sprint goal"
-              value={forms.sprint.goal}
+              value={f.goal}
               onChange={(e) => updateForm("sprint", { goal: e.target.value })}
             />
-            <div className="inline-fields">
-              <select
-                className="input-control"
-                value={forms.sprint.state}
-                onChange={(e) => updateForm("sprint", { state: e.target.value })}
-              >
-                <option value="planned">Planned</option>
-                <option value="active">Active</option>
-                <option value="completed">Completed</option>
-              </select>
+          </label>
+          <label className="field">
+            <span className="field__label">State</span>
+            <select
+              className="select"
+              value={f.state}
+              onChange={(e) => updateForm("sprint", { state: e.target.value })}
+            >
+              <option value="planned">Planned</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+            </select>
+          </label>
+          <div className="inline-fields">
+            <label className="field">
+              <span className="field__label">Start</span>
               <input
-                className="input-control"
+                className="input"
                 type="date"
-                value={forms.sprint.start_at}
+                value={f.start_at}
                 onChange={(e) => updateForm("sprint", { start_at: e.target.value })}
               />
-            </div>
-            <input
-              className="input-control"
-              type="date"
-              value={forms.sprint.end_at}
-              onChange={(e) => updateForm("sprint", { end_at: e.target.value })}
-            />
-            <button
-              type="button"
-              className="btn primary"
-              disabled={busySection === "sprint" || !forms.sprint.name.trim()}
-              onClick={() =>
-                void createRecord("sprint", "sprints", {
-                  name: forms.sprint.name.trim(),
-                  goal: forms.sprint.goal.trim() || null,
-                  state: forms.sprint.state,
-                  start_at: toDayStart(forms.sprint.start_at),
-                  end_at: toDayStart(forms.sprint.end_at),
-                })
-              }
-            >
-              {busySection === "sprint" ? "Creating..." : "Add sprint"}
-            </button>
+            </label>
+            <label className="field">
+              <span className="field__label">End</span>
+              <input
+                className="input"
+                type="date"
+                value={f.end_at}
+                onChange={(e) => updateForm("sprint", { end_at: e.target.value })}
+              />
+            </label>
           </div>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busySection === "sprint" || !f.name.trim()}
+            onClick={() =>
+              void createRecord("sprint", "sprints", {
+                name: f.name.trim(),
+                goal: f.goal.trim() || null,
+                state: f.state,
+                start_at: toDayStart(f.start_at),
+                end_at: toDayStart(f.end_at),
+              })
+            }
+          >
+            {busySection === "sprint" ? "Creating…" : "Add sprint"}
+          </button>
         </div>
-
-        <div className="catalog-section">
-          <CatalogList
-            title="Labels"
-            items={catalog.labels}
-            emptyText="No labels yet."
-            renderItem={(item) => (
-              <li key={item.id} className="catalog-card__item">
-                <div className="catalog-card__label-row">
-                  <span className="catalog-chip" style={{ background: item.color }} />
-                  <strong>{item.name}</strong>
-                </div>
-                <button
-                  type="button"
-                  className="btn subtle btn-compact"
-                  onClick={() => void deleteRecord("labels", item.id, item.name)}
-                >
-                  Delete
-                </button>
-              </li>
-            )}
-          />
-          <div className="catalog-form">
+      );
+    }
+    if (activeTab === "labels") {
+      const f = forms.label;
+      return (
+        <div className="catalog-form">
+          <div className="catalog-form__title">New label</div>
+          <label className="field">
+            <span className="field__label">Name</span>
             <input
-              className="input-control"
-              placeholder="Label name"
-              value={forms.label.name}
+              className="input"
+              placeholder="e.g. backend"
+              value={f.name}
               onChange={(e) => updateForm("label", { name: e.target.value })}
             />
+          </label>
+          <label className="field">
+            <span className="field__label">Color</span>
             <input
-              className="input-control"
+              className="input"
               type="color"
-              value={forms.label.color}
+              value={f.color}
               onChange={(e) => updateForm("label", { color: e.target.value })}
             />
-            <button
-              type="button"
-              className="btn primary"
-              disabled={busySection === "label" || !forms.label.name.trim()}
-              onClick={() =>
-                void createRecord("label", "labels", {
-                  name: forms.label.name.trim(),
-                  color: forms.label.color,
-                })
-              }
-            >
-              {busySection === "label" ? "Creating..." : "Add label"}
-            </button>
-          </div>
+          </label>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busySection === "label" || !f.name.trim()}
+            onClick={() =>
+              void createRecord("label", "labels", {
+                name: f.name.trim(),
+                color: f.color,
+              })
+            }
+          >
+            {busySection === "label" ? "Creating…" : "Add label"}
+          </button>
         </div>
-
-        <div className="catalog-section">
-          <CatalogList
-            title="Components"
-            items={catalog.components}
-            emptyText="No components yet."
-            renderItem={(item) => (
-              <li key={item.id} className="catalog-card__item">
-                <div>
-                  <strong>{item.name}</strong>
-                  {item.description && <p>{item.description}</p>}
-                </div>
-                <button
-                  type="button"
-                  className="btn subtle btn-compact"
-                  onClick={() => void deleteRecord("components", item.id, item.name)}
-                >
-                  Delete
-                </button>
-              </li>
-            )}
-          />
-          <div className="catalog-form">
+      );
+    }
+    if (activeTab === "components") {
+      const f = forms.component;
+      return (
+        <div className="catalog-form">
+          <div className="catalog-form__title">New component</div>
+          <label className="field">
+            <span className="field__label">Name</span>
             <input
-              className="input-control"
-              placeholder="Component name"
-              value={forms.component.name}
+              className="input"
+              placeholder="e.g. Auth service"
+              value={f.name}
               onChange={(e) => updateForm("component", { name: e.target.value })}
             />
+          </label>
+          <label className="field">
+            <span className="field__label">Description</span>
             <textarea
-              className="input-control input-control--textarea"
-              rows="2"
+              className="textarea"
+              rows={3}
               placeholder="What area does this cover?"
-              value={forms.component.description}
+              value={f.description}
               onChange={(e) => updateForm("component", { description: e.target.value })}
             />
-            <button
-              type="button"
-              className="btn primary"
-              disabled={busySection === "component" || !forms.component.name.trim()}
-              onClick={() =>
-                void createRecord("component", "components", {
-                  name: forms.component.name.trim(),
-                  description: forms.component.description.trim() || null,
-                })
-              }
-            >
-              {busySection === "component" ? "Creating..." : "Add component"}
-            </button>
-          </div>
+          </label>
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busySection === "component" || !f.name.trim()}
+            onClick={() =>
+              void createRecord("component", "components", {
+                name: f.name.trim(),
+                description: f.description.trim() || null,
+              })
+            }
+          >
+            {busySection === "component" ? "Creating…" : "Add component"}
+          </button>
         </div>
-
-        <div className="catalog-section">
-          <CatalogList
-            title="Versions"
-            items={catalog.versions}
-            emptyText="No release versions yet."
-            renderItem={(item) => (
-              <li key={item.id} className="catalog-card__item">
-                <div>
-                  <strong>{item.name}</strong>
-                  <p>{item.is_released ? "Released" : "Planned"}</p>
-                </div>
-                <button
-                  type="button"
-                  className="btn subtle btn-compact"
-                  onClick={() => void deleteRecord("versions", item.id, item.name)}
-                >
-                  Delete
-                </button>
-              </li>
-            )}
-          />
-          <div className="catalog-form">
+      );
+    }
+    if (activeTab === "versions") {
+      const f = forms.version;
+      return (
+        <div className="catalog-form">
+          <div className="catalog-form__title">New version</div>
+          <label className="field">
+            <span className="field__label">Name</span>
             <input
-              className="input-control"
-              placeholder="Version name"
-              value={forms.version.name}
+              className="input"
+              placeholder="e.g. 1.4.0"
+              value={f.name}
               onChange={(e) => updateForm("version", { name: e.target.value })}
             />
+          </label>
+          <label className="field">
+            <span className="field__label">Description</span>
             <textarea
-              className="input-control input-control--textarea"
-              rows="2"
-              placeholder="Version description"
-              value={forms.version.description}
+              className="textarea"
+              rows={2}
+              placeholder="Release notes"
+              value={f.description}
               onChange={(e) => updateForm("version", { description: e.target.value })}
             />
-            <label className="catalog-form__checkbox">
-              <input
-                type="checkbox"
-                checked={forms.version.is_released}
-                onChange={(e) => updateForm("version", { is_released: e.target.checked })}
-              />
-              <span>Released</span>
-            </label>
+          </label>
+          <label className="checkbox-row">
             <input
-              className="input-control"
-              type="date"
-              value={forms.version.released_at}
-              onChange={(e) => updateForm("version", { released_at: e.target.value })}
+              type="checkbox"
+              checked={f.is_released}
+              onChange={(e) => updateForm("version", { is_released: e.target.checked })}
             />
-            <button
-              type="button"
-              className="btn primary"
-              disabled={busySection === "version" || !forms.version.name.trim()}
-              onClick={() =>
-                void createRecord("version", "versions", {
-                  name: forms.version.name.trim(),
-                  description: forms.version.description.trim() || null,
-                  is_released: forms.version.is_released,
-                  released_at: toDayStart(forms.version.released_at),
-                })
-              }
-            >
-              {busySection === "version" ? "Creating..." : "Add version"}
-            </button>
-          </div>
+            <span>Released</span>
+          </label>
+          {f.is_released && (
+            <label className="field">
+              <span className="field__label">Released at</span>
+              <input
+                className="input"
+                type="date"
+                value={f.released_at}
+                onChange={(e) => updateForm("version", { released_at: e.target.value })}
+              />
+            </label>
+          )}
+          <button
+            type="button"
+            className="btn btn--primary"
+            disabled={busySection === "version" || !f.name.trim()}
+            onClick={() =>
+              void createRecord("version", "versions", {
+                name: f.name.trim(),
+                description: f.description.trim() || null,
+                is_released: f.is_released,
+                released_at: toDayStart(f.released_at),
+              })
+            }
+          >
+            {busySection === "version" ? "Creating…" : "Add version"}
+          </button>
         </div>
+      );
+    }
+    return null;
+  };
+
+  const footer = (
+    <button type="button" className="btn" onClick={onClose}>
+      Done
+    </button>
+  );
+
+  return (
+    <Modal
+      title={`${project.key} · Planning`}
+      subtitle="Epics, sprints, labels, components, and versions."
+      onClose={onClose}
+      footer={footer}
+      size="wide"
+    >
+      <div className="catalog-tabs" role="tablist">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            className={`catalog-tab ${activeTab === tab.id ? "catalog-tab--active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
-    </section>
+      <div className="catalog-section">
+        {renderList()}
+        {renderForm()}
+      </div>
+    </Modal>
+  );
+}
+
+function EmptyState({ label }) {
+  return (
+    <li style={{ padding: "20px 12px", textAlign: "center", color: "var(--fg-subtle)", fontSize: "12px" }}>
+      {label}
+    </li>
+  );
+}
+
+function DeleteButton({ onClick }) {
+  return (
+    <button
+      type="button"
+      className="btn btn--ghost btn--icon"
+      aria-label="Delete"
+      onClick={onClick}
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 6h18" />
+        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+        <path d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      </svg>
+    </button>
   );
 }

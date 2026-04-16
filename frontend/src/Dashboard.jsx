@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useReducedMotion } from "framer-motion";
 import { useNavigate, useParams } from "react-router-dom";
 import { API_BASE_URL } from "./apiConfig";
 import { useAuth } from "./AuthContext";
-import CreateIssueSection from "./components/CreateIssueSection";
+import CreateIssueModal from "./components/CreateIssueModal";
 import IssueFiltersBar from "./components/IssueFiltersBar";
 import IssueListSection from "./components/IssueListSection";
-import WorkspaceHero from "./components/WorkspaceHero";
 import IssueDetailPanel from "./IssueDetailPanel";
 import NotificationCenter from "./NotificationCenter";
-import ProjectCatalogManager from "./ProjectCatalogManager";
+import ProjectCatalogModal from "./ProjectCatalogManager";
 import ProjectSidebar from "./ProjectSidebar";
 import { userInitials } from "./issueConstants";
 import { INITIAL_FILTER_STATE } from "./issueFormState";
@@ -78,7 +76,6 @@ async function readError(response, fallback) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const reduceMotion = useReducedMotion();
   const { bugId } = useParams();
   const { auth, logout } = useAuth();
 
@@ -100,7 +97,9 @@ export default function Dashboard() {
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [reorderingId, setReorderingId] = useState(null);
-  const [formShake, setFormShake] = useState(false);
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [catalogOpen, setCatalogOpen] = useState(false);
 
   const totalPages = Math.max(1, Math.ceil(totalBugs / PAGE_SIZE));
   const activeFilterCount = useMemo(() => countActiveFilters(activeFilters), [activeFilters]);
@@ -297,7 +296,7 @@ export default function Dashboard() {
   };
 
   const handleApplyFilters = (event) => {
-    event.preventDefault();
+    if (event?.preventDefault) event.preventDefault();
     setCurrentPage(0);
     setActiveFilters({ ...filterForm });
   };
@@ -313,11 +312,18 @@ export default function Dashboard() {
     void fetchBugs({ page: newPage, showLoading: true });
   };
 
+  const openCreate = () => {
+    setForm({
+      ...INITIAL_FORM_STATE,
+      project_id: selectedProjectId ? String(selectedProjectId) : "",
+    });
+    setCreateOpen(true);
+  };
+
   const handleCreateBug = async (event) => {
-    event.preventDefault();
+    if (event?.preventDefault) event.preventDefault();
     if (!form.title.trim()) {
-      setFormShake(true);
-      setTimeout(() => setFormShake(false), 500);
+      toast("Title is required.", "error");
       return;
     }
     try {
@@ -357,7 +363,8 @@ export default function Dashboard() {
         ...INITIAL_FORM_STATE,
         project_id: selectedProjectId ? String(selectedProjectId) : "",
       });
-      toast("Issue created successfully.");
+      setCreateOpen(false);
+      toast("Issue created.");
     } catch (err) {
       toast(err.message || "Something went wrong while creating the issue.", "error");
     } finally {
@@ -366,7 +373,7 @@ export default function Dashboard() {
   };
 
   const handleDeleteBug = async (bugToDelete) => {
-    if (!window.confirm(`Delete ${bugToDelete.title}? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete "${bugToDelete.title}"? This cannot be undone.`)) return;
     try {
       setDeletingId(bugToDelete.id);
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugToDelete.id}`, {
@@ -420,7 +427,7 @@ export default function Dashboard() {
         throw new Error(await readError(response, "Failed to reorder backlog."));
       }
       await fetchBugs({ showLoading: false });
-      toast("Backlog order updated.");
+      toast("Backlog reordered.");
     } catch (err) {
       toast(err.message || "Something went wrong while reordering.", "error");
     } finally {
@@ -428,31 +435,42 @@ export default function Dashboard() {
     }
   };
 
+  const isOwner = selectedProject?.owner_id === auth?.user_id;
+
   return (
-    <div className="app-frame">
+    <div className="app">
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
-      <div className="app-frame__aurora" aria-hidden />
 
-      <header className="top-nav">
-        <div className="top-nav__inner">
-          <div className="top-nav__brand">
-            <span className="top-nav__mark" aria-hidden />
-            <span className="top-nav__name">Mini Jira</span>
+      <header className="topbar">
+        <div className="topbar__left">
+          <div className="topbar__brand">
+            <span className="topbar__mark" aria-hidden>J</span>
+            <span>Mini Jira</span>
           </div>
-          <div className="top-nav__actions">
-            <NotificationCenter fetchWithAuth={fetchWithAuth} />
-            <div className="top-nav__user">
-              <span className="top-nav__avatar" aria-hidden>
-                {userInitials(auth?.username)}
-              </span>
-              <span className="top-nav__username">{auth?.username}</span>
-            </div>
-            <button type="button" className="btn btn-ghost-outline btn-compact" onClick={handleLogout}>
-              Sign out
-            </button>
+          <span className="topbar__divider" aria-hidden />
+          <div className="topbar__context">
+            {selectedProject ? (
+              <>
+                <span className="topbar__context-key">{selectedProject.key}</span>
+                <span>·</span>
+                <span>{selectedProject.name}</span>
+              </>
+            ) : (
+              <span>All issues</span>
+            )}
           </div>
+        </div>
+        <div className="topbar__right">
+          <NotificationCenter fetchWithAuth={fetchWithAuth} />
+          <div className="topbar__user" title={auth?.username}>
+            <span className="topbar__avatar" aria-hidden>{userInitials(auth?.username)}</span>
+            <span>{auth?.username}</span>
+          </div>
+          <button type="button" className="btn btn--ghost" onClick={handleLogout}>
+            Sign out
+          </button>
         </div>
       </header>
 
@@ -463,47 +481,91 @@ export default function Dashboard() {
           selectedProjectId={selectedProjectId}
           onSelectProject={handleSelectProject}
           onProjectsChange={refreshProjects}
+          currentUserId={auth?.user_id}
         />
 
-        <div className={`workspace__main ${bugId ? "workspace__main--split" : ""}`}>
-          <div className="workspace__scroll">
-            <div className="page-container">
-              <WorkspaceHero
-                reduceMotion={reduceMotion}
-                selectedProject={selectedProject}
+        <main className={`main ${bugId ? "main--with-detail" : ""}`}>
+          <div className="page__header">
+            <div className="page__title-row">
+              <h1 className="page__title">
+                {selectedProject ? selectedProject.name : "All issues"}
+              </h1>
+              <span className="page__meta">
+                <strong>{totalBugs}</strong>
+                {totalBugs === 1 ? " issue" : " issues"}
+                {activeFilterCount > 0 && (
+                  <> · {activeFilterCount} filter{activeFilterCount === 1 ? "" : "s"}</>
+                )}
+              </span>
+            </div>
+            <div className="page__actions">
+              {selectedProject && isOwner && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setCatalogOpen(true)}
+                >
+                  Planning
+                </button>
+              )}
+              <button type="button" className="btn btn--primary" onClick={openCreate}>
+                New issue
+              </button>
+            </div>
+          </div>
+
+          {bugId ? (
+            <div className="page__body-wrap">
+              <IssueFiltersBar
+                filterForm={filterForm}
+                onFilterChange={handleFilterFieldChange}
+                onApply={handleApplyFilters}
+                onClear={handleClearFilters}
+                filtersDirty={filtersDirty}
                 activeFilterCount={activeFilterCount}
-                listLoadComplete={listLoadComplete}
-                loading={loading}
-                totalBugs={totalBugs}
+                selectedProjectCatalog={selectedProjectCatalog}
               />
-
-              <div id="main-content" className="workspace-grid" tabIndex={-1}>
-                <CreateIssueSection
-                  reduceMotion={reduceMotion}
-                  formShake={formShake}
-                  form={form}
-                  projects={projects}
-                  createCatalog={createCatalog}
-                  effectiveCreateProjectId={effectiveCreateProjectId}
-                  onFieldChange={handleFormFieldChange}
-                  onLabelToggle={handleCreateLabelToggle}
-                  onSubmit={handleCreateBug}
-                  submitting={submitting}
-                />
-
-                <div className="workspace-grid__list">
-                  <IssueFiltersBar
-                    reduceMotion={reduceMotion}
-                    filterForm={filterForm}
-                    onFilterChange={handleFilterFieldChange}
-                    onApply={handleApplyFilters}
-                    onClear={handleClearFilters}
-                    filtersDirty={filtersDirty}
-                    activeFilterCount={activeFilterCount}
-                    selectedProjectCatalog={selectedProjectCatalog}
-                  />
+              <div id="main-content" className="page__body" tabIndex={-1}>
+                <div className="page__inner">
                   <IssueListSection
-                    reduceMotion={reduceMotion}
+                    loading={loading}
+                    listLoadComplete={listLoadComplete}
+                    fetchError={fetchError}
+                    bugs={bugs}
+                    totalBugs={totalBugs}
+                    totalPages={totalPages}
+                    currentPage={currentPage}
+                    PAGE_SIZE={PAGE_SIZE}
+                    activeFilters={activeFilters}
+                    activeFilterCount={activeFilterCount}
+                    selectedProjectId={selectedProjectId}
+                    deletingId={deletingId}
+                    reorderingId={reorderingId}
+                    onRefresh={() => void fetchBugs({ showLoading: true })}
+                    onRetry={() => void fetchBugs({ showLoading: true })}
+                    onNavigateIssue={(id) => navigate(`/dashboard/bugs/${id}`)}
+                    onDeleteBug={handleDeleteBug}
+                    onMoveBug={handleMoveBug}
+                    onPageChange={handlePageChange}
+                    activeBugId={bugId ? Number(bugId) : null}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <IssueFiltersBar
+                filterForm={filterForm}
+                onFilterChange={handleFilterFieldChange}
+                onApply={handleApplyFilters}
+                onClear={handleClearFilters}
+                filtersDirty={filtersDirty}
+                activeFilterCount={activeFilterCount}
+                selectedProjectCatalog={selectedProjectCatalog}
+              />
+              <div id="main-content" className="page__body" tabIndex={-1}>
+                <div className="page__inner">
+                  <IssueListSection
                     loading={loading}
                     listLoadComplete={listLoadComplete}
                     fetchError={fetchError}
@@ -525,20 +587,9 @@ export default function Dashboard() {
                     onPageChange={handlePageChange}
                   />
                 </div>
-
-                {selectedProject && selectedProjectCatalog && (
-                  <section className="catalog-dock">
-                    <ProjectCatalogManager
-                      project={selectedProject}
-                      catalog={selectedProjectCatalog}
-                      fetchWithAuth={fetchWithAuth}
-                      onCatalogChange={refreshSelectedProjectCatalog}
-                    />
-                  </section>
-                )}
               </div>
-            </div>
-          </div>
+            </>
+          )}
 
           {bugId && (
             <IssueDetailPanel
@@ -550,8 +601,32 @@ export default function Dashboard() {
               onIssueUpdated={handleIssueUpdated}
             />
           )}
-        </div>
+        </main>
       </div>
+
+      {createOpen && (
+        <CreateIssueModal
+          form={form}
+          projects={projects}
+          createCatalog={createCatalog}
+          effectiveCreateProjectId={effectiveCreateProjectId}
+          onFieldChange={handleFormFieldChange}
+          onLabelToggle={handleCreateLabelToggle}
+          onSubmit={handleCreateBug}
+          onClose={() => setCreateOpen(false)}
+          submitting={submitting}
+        />
+      )}
+
+      {catalogOpen && selectedProject && selectedProjectCatalog && (
+        <ProjectCatalogModal
+          project={selectedProject}
+          catalog={selectedProjectCatalog}
+          fetchWithAuth={fetchWithAuth}
+          onCatalogChange={refreshSelectedProjectCatalog}
+          onClose={() => setCatalogOpen(false)}
+        />
+      )}
     </div>
   );
 }

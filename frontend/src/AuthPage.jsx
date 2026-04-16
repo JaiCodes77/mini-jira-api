@@ -1,10 +1,7 @@
 import { Navigate, useNavigate } from "react-router-dom";
-import { motion } from "framer-motion";
 import AuthForm from "./AuthForm";
 import { API_BASE_URL } from "./apiConfig";
 import { useAuth } from "./AuthContext";
-
-const spring = { type: "spring", stiffness: 340, damping: 28 };
 
 export default function AuthPage() {
   const { auth, login } = useAuth();
@@ -20,26 +17,18 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="auth-page">
-      <div className="mesh-bg" />
-
-      <motion.header
-        className="auth-page-header"
-        initial={{ opacity: 0, y: -16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ ...spring, delay: 0.04 }}
-      >
-        <p className="eyebrow">
-          <span className="eyebrow-dot" />
-          Mini Jira
+    <div className="auth">
+      <div className="auth__card">
+        <div className="auth__brand">
+          <span className="auth__brand-mark" aria-hidden>J</span>
+          <span className="auth__brand-name">Mini Jira</span>
+        </div>
+        <h1 className="auth__title">Welcome back</h1>
+        <p className="auth__subtitle">
+          Sign in to manage projects, track issues, and collaborate.
         </p>
-        <h1>Welcome back</h1>
-        <p className="subtitle">
-          Sign in or create an account to manage projects and issues.
-        </p>
-      </motion.header>
-
-      <AuthForm apiBaseUrl={API_BASE_URL} onAuthenticated={handleAuthenticated} />
+        <AuthForm apiBaseUrl={API_BASE_URL} onAuthenticated={handleAuthenticated} />
+      </div>
     </div>
   );
 }

@@ -1,17 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { API_BASE_URL } from "./apiConfig";
 import { toast } from "./Toasts";
 
-const formatDate = (value) =>
-  new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
+const formatRelative = (value) => {
+  const now = new Date();
+  const date = new Date(value);
+  const diff = Math.floor((now - date) / 1000);
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(date);
+};
 
 export default function NotificationCenter({ fetchWithAuth }) {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const wrapperRef = useRef(null);
 
   const unreadCount = useMemo(
     () => notifications.filter((item) => !item.is_read).length,
@@ -43,9 +51,16 @@ export default function NotificationCenter({ fetchWithAuth }) {
     return () => clearInterval(interval);
   }, [loadNotifications]);
 
-  const handleToggle = () => {
-    setOpen((prev) => !prev);
-  };
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (event) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
 
   const markRead = useCallback(
     async (notificationId, isRead) => {
@@ -70,67 +85,118 @@ export default function NotificationCenter({ fetchWithAuth }) {
     [fetchWithAuth],
   );
 
+  const markAllRead = async () => {
+    const unread = notifications.filter((n) => !n.is_read);
+    if (unread.length === 0) return;
+    await Promise.all(unread.map((n) => markRead(n.id, true)));
+    toast("Marked all as read.");
+  };
+
+  const handleItemClick = (item) => {
+    if (!item.is_read) void markRead(item.id, true);
+    if (item.bug_id) {
+      navigate(`/dashboard/bugs/${item.bug_id}`);
+      setOpen(false);
+    }
+  };
+
   return (
-    <div className="notification-center">
+    <div className="notif" ref={wrapperRef}>
       <button
         type="button"
-        className="btn btn-ghost-outline notification-center__trigger"
-        onClick={handleToggle}
+        className="notif__trigger"
+        onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label={`Notifications${unreadCount ? ` (${unreadCount} unread)` : ""}`}
       >
-        <svg
-          className="notification-center__bell"
-          width="18"
-          height="18"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden
-        >
-          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+          <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
         </svg>
-        {unreadCount > 0 && <span className="notification-center__badge">{unreadCount}</span>}
+        {unreadCount > 0 && <span className="notif__badge">{unreadCount > 99 ? "99+" : unreadCount}</span>}
       </button>
 
       {open && (
-        <div className="notification-center__panel">
-          <div className="notification-center__panel-header">
+        <div className="notif__panel" role="dialog" aria-label="Notifications">
+          <div className="notif__panel-header">
             <strong>Notifications</strong>
-            <button
-              type="button"
-              className="btn subtle btn-compact"
-              onClick={() => void loadNotifications()}
-              disabled={loading}
-            >
-              {loading ? "Refreshing..." : "Refresh"}
-            </button>
+            <div style={{ display: "flex", gap: "4px" }}>
+              {unreadCount > 0 && (
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={() => void markAllRead()}
+                >
+                  Mark all read
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn--ghost btn--icon"
+                aria-label="Refresh"
+                onClick={() => void loadNotifications()}
+                disabled={loading}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+                  <path d="M21 3v5h-5" />
+                  <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+                  <path d="M3 21v-5h5" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           {notifications.length === 0 ? (
-            <p className="notification-center__empty">Nothing new yet.</p>
+            <div className="notif__empty">
+              {loading ? "Loading…" : "You're all caught up."}
+            </div>
           ) : (
-            <ul className="notification-center__list">
+            <ul className="notif__list">
               {notifications.map((item) => (
                 <li
                   key={item.id}
-                  className={`notification-center__item ${item.is_read ? "" : "notification-center__item--unread"}`}
+                  className="notif__item"
+                  onClick={() => handleItemClick(item)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      handleItemClick(item);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  style={{ cursor: item.bug_id ? "pointer" : "default" }}
                 >
-                  <div className="notification-center__item-text">
-                    <strong>{item.title}</strong>
-                    <p>{item.body}</p>
-                    <span>{formatDate(item.created_at)}</span>
+                  {item.is_read ? (
+                    <span className="notif__placeholder" aria-hidden />
+                  ) : (
+                    <span className="notif__unread" aria-hidden />
+                  )}
+                  <div className="notif__text">
+                    <div className="notif__title">{item.title}</div>
+                    <div className="notif__body">{item.body}</div>
+                    <div className="notif__date">{formatRelative(item.created_at)}</div>
                   </div>
                   <button
                     type="button"
-                    className="btn subtle btn-compact"
-                    onClick={() => void markRead(item.id, !item.is_read)}
+                    className="btn btn--ghost btn--icon"
+                    aria-label={item.is_read ? "Mark unread" : "Mark read"}
+                    title={item.is_read ? "Mark unread" : "Mark read"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void markRead(item.id, !item.is_read);
+                    }}
                   >
-                    {item.is_read ? "Unread" : "Read"}
+                    {item.is_read ? (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="4" />
+                      </svg>
+                    ) : (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6 9 17l-5-5" />
+                      </svg>
+                    )}
                   </button>
                 </li>
               ))}

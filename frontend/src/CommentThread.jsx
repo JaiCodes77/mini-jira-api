@@ -2,12 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { API_BASE_URL } from "./apiConfig";
 import { toast } from "./Toasts";
 import MarkdownText from "./MarkdownText";
+import { userInitials } from "./issueConstants";
 
-const formatDate = (value) =>
-  new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
+const formatDate = (value) => {
+  const date = new Date(value);
+  const now = new Date();
+  const diff = Math.floor((now - date) / 1000);
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(date);
+};
 
 const PAGE_SIZE = 20;
 
@@ -43,10 +49,9 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
     void fetchComments();
   }, [fetchComments]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     if (!body.trim()) return;
-
     try {
       setSubmitting(true);
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/comments`, {
@@ -54,12 +59,10 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ body: body.trim() }),
       });
-
       if (!response.ok) {
         if (response.status === 401) return;
         throw new Error("Failed to add comment.");
       }
-
       setBody("");
       await fetchComments(0);
       toast("Comment added.");
@@ -72,17 +75,14 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
 
   const handleDelete = async (commentId) => {
     if (!window.confirm("Delete this comment?")) return;
-
     try {
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/comments/${commentId}`, {
         method: "DELETE",
       });
-
       if (!response.ok) {
         if (response.status === 401) return;
         throw new Error("Failed to delete comment.");
       }
-
       await fetchComments(offset);
       toast("Comment deleted.");
     } catch (err) {
@@ -123,32 +123,33 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
   );
 
   return (
-    <div className="comment-thread">
-      <span className="comment-thread__title">Comments</span>
-
+    <div className="comments">
       {loading ? (
-        <p className="comment-empty">Loading comments…</p>
+        <div className="detail-section__empty">Loading comments…</div>
       ) : comments.length === 0 ? (
-        <p className="comment-empty">No comments yet.</p>
+        <div className="detail-section__empty">No comments yet. Start the conversation.</div>
       ) : (
-        <ul className="comment-list">
-          {comments.map((comment) => (
-            <li key={comment.id} className="comment-item">
-              <div className="comment-item__header">
-                <span className="comment-item__author">{comment.author.username}</span>
-                <span className="comment-item__date">{formatDate(comment.created_at)}</span>
-                {comment.author_id === currentUserId && (
-                  <div className="comment-item__actions">
+        comments.map((comment) => {
+          const isAuthor = comment.author_id === currentUserId;
+          const isEditing = editingId === comment.id;
+          return (
+            <article key={comment.id} className="comment">
+              <div className="comment__header">
+                <span className="avatar" aria-hidden>{userInitials(comment.author.username)}</span>
+                <span className="comment__author">{comment.author.username}</span>
+                <span className="comment__date">{formatDate(comment.created_at)}</span>
+                {isAuthor && !isEditing && (
+                  <div className="comment__actions">
                     <button
                       type="button"
-                      className="comment-item__delete"
+                      className="btn btn--ghost"
                       onClick={() => handleEditStart(comment)}
                     >
                       Edit
                     </button>
                     <button
                       type="button"
-                      className="comment-item__delete"
+                      className="btn btn--ghost"
                       onClick={() => void handleDelete(comment.id)}
                     >
                       Delete
@@ -156,32 +157,18 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
                   </div>
                 )}
               </div>
-              {comment.mentioned_users?.length > 0 && (
-                <div className="comment-item__mentions">
-                  Mentioned:{" "}
-                  {comment.mentioned_users.map((user) => `@${user.username}`).join(", ")}
-                </div>
-              )}
-              {editingId === comment.id ? (
-                <div className="comment-item__editor">
+              {isEditing ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <textarea
-                    className="comment-form__input comment-form__textarea"
-                    rows="3"
+                    className="textarea"
+                    rows={3}
                     value={editBody}
                     onChange={(e) => setEditBody(e.target.value)}
                   />
-                  <div className="comment-item__actions">
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                     <button
                       type="button"
-                      className="comment-form__submit"
-                      onClick={() => void handleEditSave()}
-                      disabled={!editBody.trim()}
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      className="btn subtle btn-compact"
+                      className="btn"
                       onClick={() => {
                         setEditingId(null);
                         setEditBody("");
@@ -189,32 +176,47 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
                     >
                       Cancel
                     </button>
+                    <button
+                      type="button"
+                      className="btn btn--primary"
+                      onClick={() => void handleEditSave()}
+                      disabled={!editBody.trim()}
+                    >
+                      Save
+                    </button>
                   </div>
                 </div>
               ) : (
-                <MarkdownText className="comment-item__body markdown-body" value={comment.body} />
+                <>
+                  <MarkdownText value={comment.body} />
+                  {comment.mentioned_users?.length > 0 && (
+                    <div className="comment__mentions">
+                      Mentioned: {comment.mentioned_users.map((user) => `@${user.username}`).join(", ")}
+                    </div>
+                  )}
+                </>
               )}
-            </li>
-          ))}
-        </ul>
+            </article>
+          );
+        })
       )}
 
       {!loading && total > PAGE_SIZE && (
-        <div className="comment-thread__footer">
+        <div className="comment-pager">
           <button
             type="button"
-            className="btn subtle btn-compact"
+            className="btn"
             disabled={offset === 0}
             onClick={() => void fetchComments(Math.max(0, offset - PAGE_SIZE))}
           >
             Newer
           </button>
-          <span className="comment-thread__page-info">
-            {Math.min(offset + 1, total)}-{Math.min(offset + PAGE_SIZE, total)} of {total}
+          <span>
+            {Math.min(offset + 1, total)}–{Math.min(offset + PAGE_SIZE, total)} of {total}
           </span>
           <button
             type="button"
-            className="btn subtle btn-compact"
+            className="btn"
             disabled={offset + PAGE_SIZE >= total}
             onClick={() => void fetchComments(offset + PAGE_SIZE)}
           >
@@ -226,22 +228,24 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
       {auth?.token && (
         <form className="comment-form" onSubmit={handleSubmit}>
           <textarea
-            className="comment-form__input comment-form__textarea"
-            rows="3"
+            className="textarea"
+            rows={3}
             placeholder="Write a comment. Use @username to mention teammates."
             value={body}
             onChange={(e) => setBody(e.target.value)}
           />
-          {mentionHint && (
-            <span className="comment-thread__hint">Try mentions like {mentionHint}</span>
-          )}
-          <button
-            type="submit"
-            className="comment-form__submit"
-            disabled={submitting || !body.trim()}
-          >
-            {submitting ? "Posting…" : "Post"}
-          </button>
+          <div className="comment-form__actions">
+            {mentionHint && (
+              <span className="comment-form__hint">Mentions: {mentionHint}</span>
+            )}
+            <button
+              type="submit"
+              className="btn btn--primary"
+              disabled={submitting || !body.trim()}
+            >
+              {submitting ? "Posting…" : "Post comment"}
+            </button>
+          </div>
         </form>
       )}
     </div>

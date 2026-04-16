@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
 import { toast } from "./Toasts";
 
 async function readErrorMessage(response) {
@@ -21,8 +20,6 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const spring = { type: "spring", stiffness: 340, damping: 28 };
-
   const handleLogin = async (event) => {
     event.preventDefault();
     if (!username.trim() || !password) {
@@ -41,9 +38,7 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
         body: body.toString(),
       });
 
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
+      if (!response.ok) throw new Error(await readErrorMessage(response));
 
       const data = await response.json();
       onAuthenticated({
@@ -52,7 +47,7 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
         user_id: data.user_id,
       });
       setPassword("");
-      toast("Signed in successfully.");
+      toast("Signed in.");
     } catch (err) {
       toast(err.message || "Could not sign in.", "error");
     } finally {
@@ -78,9 +73,7 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response));
-      }
+      if (!response.ok) throw new Error(await readErrorMessage(response));
 
       const body = new URLSearchParams();
       body.set("username", username.trim());
@@ -105,7 +98,7 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
         user_id: data.user_id,
       });
       setPassword("");
-      toast("Account created. You're signed in.");
+      toast("Account created. You are signed in.");
     } catch (err) {
       toast(err.message || "Could not register.", "error");
     } finally {
@@ -113,105 +106,98 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
     }
   };
 
+  const onSubmit = mode === "login" ? handleLogin : handleRegister;
+
   return (
-    <motion.div
-      className="auth-card auth-card--page"
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={spring}
-    >
-      <div className="auth-tabs">
+    <>
+      <div className="auth__tabs" role="tablist">
         <button
           type="button"
-          className={`auth-tab ${mode === "login" ? "active" : ""}`}
+          role="tab"
+          aria-selected={mode === "login"}
+          className={`auth__tab ${mode === "login" ? "auth__tab--active" : ""}`}
           onClick={() => setMode("login")}
         >
           Sign in
         </button>
         <button
           type="button"
-          className={`auth-tab ${mode === "register" ? "active" : ""}`}
+          role="tab"
+          aria-selected={mode === "register"}
+          className={`auth__tab ${mode === "register" ? "auth__tab--active" : ""}`}
           onClick={() => setMode("register")}
         >
-          Register
+          Create account
         </button>
       </div>
 
-      {mode === "login" ? (
-        <form className="auth-form" onSubmit={handleLogin}>
-          <label>
-            <span className="label-text">Username</span>
+      <form className="auth__form" onSubmit={onSubmit}>
+        <label className="field">
+          <span className="field__label">Username</span>
+          <input
+            className="input"
+            type="text"
+            autoComplete="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            disabled={busy}
+            placeholder="jane"
+          />
+        </label>
+
+        {mode === "register" && (
+          <label className="field">
+            <span className="field__label">Email</span>
             <input
-              type="text"
-              autoComplete="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              disabled={busy}
-            />
-          </label>
-          <label>
-            <span className="label-text">Password</span>
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={busy}
-            />
-          </label>
-          <button type="submit" className="btn primary btn-auth" disabled={busy}>
-            {busy ? (
-              <span className="btn-loading">
-                <span className="spinner" /> Signing in...
-              </span>
-            ) : (
-              "Sign in"
-            )}
-          </button>
-        </form>
-      ) : (
-        <form className="auth-form" onSubmit={handleRegister}>
-          <label>
-            <span className="label-text">Username</span>
-            <input
-              type="text"
-              autoComplete="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              disabled={busy}
-            />
-          </label>
-          <label>
-            <span className="label-text">Email</span>
-            <input
+              className="input"
               type="email"
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               disabled={busy}
+              placeholder="jane@example.com"
             />
           </label>
-          <label>
-            <span className="label-text">Password</span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={busy}
-            />
-          </label>
-          <button type="submit" className="btn primary btn-auth" disabled={busy}>
-            {busy ? (
-              <span className="btn-loading">
-                <span className="spinner" /> Creating account...
-              </span>
-            ) : (
-              "Create account"
-            )}
-          </button>
-        </form>
-      )}
-    </motion.div>
+        )}
+
+        <label className="field">
+          <span className="field__label">Password</span>
+          <input
+            className="input"
+            type="password"
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={busy}
+            placeholder="••••••••"
+          />
+        </label>
+
+        <button type="submit" className="btn btn--primary btn--lg btn--block" disabled={busy}>
+          {busy ? (
+            <>
+              <span className="spinner" aria-hidden />
+              {mode === "login" ? "Signing in…" : "Creating account…"}
+            </>
+          ) : mode === "login" ? (
+            "Sign in"
+          ) : (
+            "Create account"
+          )}
+        </button>
+      </form>
+
+      <p className="auth__footer">
+        {mode === "login" ? "New here?" : "Already have an account?"}{" "}
+        <button
+          type="button"
+          className="btn btn--ghost"
+          style={{ height: "auto", padding: 0, fontSize: "inherit", color: "var(--fg-muted)", textDecoration: "underline" }}
+          onClick={() => setMode(mode === "login" ? "register" : "login")}
+        >
+          {mode === "login" ? "Create an account" : "Sign in instead"}
+        </button>
+      </p>
+    </>
   );
 }

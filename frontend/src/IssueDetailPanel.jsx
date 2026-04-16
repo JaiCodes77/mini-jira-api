@@ -7,6 +7,7 @@ import {
   STATUS_OPTIONS,
   formatDate,
   titleFromEnum,
+  userInitials,
 } from "./issueConstants";
 import { toast } from "./Toasts";
 import CommentThread from "./CommentThread";
@@ -38,8 +39,20 @@ const draftFromBug = (bug) => ({
   assignee_id: bug.assignee_id ?? "",
   due_at: toDateTimeLocal(bug.due_at),
   reminder_at: toDateTimeLocal(bug.reminder_at),
-  label_ids: bug.labels.map((label) => label.id),
+  label_ids: (bug.labels || []).map((label) => label.id),
 });
+
+const isDirty = (draft, bug) => {
+  if (!draft || !bug) return false;
+  const base = draftFromBug(bug);
+  if (base.label_ids.length !== draft.label_ids.length) return true;
+  if (base.label_ids.some((id) => !draft.label_ids.includes(id))) return true;
+  for (const key of Object.keys(base)) {
+    if (key === "label_ids") continue;
+    if ((base[key] ?? "") !== (draft[key] ?? "")) return true;
+  }
+  return false;
+};
 
 export default function IssueDetailPanel({
   bugId,
@@ -58,41 +71,35 @@ export default function IssueDetailPanel({
   const [saving, setSaving] = useState(false);
   const [linkForm, setLinkForm] = useState({ target_bug_id: "", link_type: "relates" });
   const [uploading, setUploading] = useState(false);
+  const [showEditor, setShowEditor] = useState(false);
 
-  const loadActivity = useCallback(
-    async (currentBugId) => {
-      const response = await fetch(`${API_BASE_URL}/bugs/${currentBugId}/activity?limit=50&offset=0`);
-      if (!response.ok) throw new Error("Failed to load activity.");
-      const data = await response.json();
-      setActivity(data.items);
-    },
-    [],
-  );
+  const loadActivity = useCallback(async (currentBugId) => {
+    const response = await fetch(
+      `${API_BASE_URL}/bugs/${currentBugId}/activity?limit=50&offset=0`,
+    );
+    if (!response.ok) throw new Error("Failed to load activity.");
+    const data = await response.json();
+    setActivity(data.items);
+  }, []);
 
-  const loadCatalog = useCallback(
-    async (projectId) => {
-      if (!projectId) {
-        setCatalog(null);
-        setProjectIssues([]);
-        return;
-      }
-
-      const [catalogResponse, bugsResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/projects/${projectId}/catalog`),
-        fetch(`${API_BASE_URL}/bugs?project_id=${projectId}&limit=100&offset=0&sort_by=backlog_rank&order=asc`),
-      ]);
-
-      if (catalogResponse.ok) {
-        const catalogData = await catalogResponse.json();
-        setCatalog(catalogData);
-      }
-      if (bugsResponse.ok) {
-        const bugData = await bugsResponse.json();
-        setProjectIssues(bugData.items);
-      }
-    },
-    [],
-  );
+  const loadCatalog = useCallback(async (projectId) => {
+    if (!projectId) {
+      setCatalog(null);
+      setProjectIssues([]);
+      return;
+    }
+    const [catalogResponse, bugsResponse] = await Promise.all([
+      fetch(`${API_BASE_URL}/projects/${projectId}/catalog`),
+      fetch(
+        `${API_BASE_URL}/bugs?project_id=${projectId}&limit=100&offset=0&sort_by=backlog_rank&order=asc`,
+      ),
+    ]);
+    if (catalogResponse.ok) setCatalog(await catalogResponse.json());
+    if (bugsResponse.ok) {
+      const bugData = await bugsResponse.json();
+      setProjectIssues(bugData.items);
+    }
+  }, []);
 
   const loadBug = useCallback(async () => {
     try {
@@ -123,6 +130,8 @@ export default function IssueDetailPanel({
     () => Boolean(bug?.watchers?.some((watcher) => watcher.id === auth?.user_id)),
     [auth?.user_id, bug?.watchers],
   );
+
+  const dirty = useMemo(() => isDirty(draft, bug), [draft, bug]);
 
   const handleDraftChange = (field, value) => {
     setDraft((prev) => {
@@ -157,7 +166,6 @@ export default function IssueDetailPanel({
       toast("Title is required.", "error");
       return;
     }
-
     try {
       setSaving(true);
       const payload = {
@@ -204,6 +212,10 @@ export default function IssueDetailPanel({
     }
   };
 
+  const resetDraft = () => {
+    if (bug) setDraft(draftFromBug(bug));
+  };
+
   const toggleWatch = async () => {
     try {
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/watch`, {
@@ -216,7 +228,7 @@ export default function IssueDetailPanel({
       const updated = await response.json();
       setBug(updated);
       onIssueUpdated(updated);
-      toast(isWatching ? "Stopped watching issue." : "Watching issue.");
+      toast(isWatching ? "Stopped watching." : "Watching issue.");
     } catch (err) {
       toast(err.message || "Something went wrong.", "error");
     }
@@ -240,7 +252,7 @@ export default function IssueDetailPanel({
       }
       setLinkForm({ target_bug_id: "", link_type: "relates" });
       await loadBug();
-      toast("Issue link added.");
+      toast("Link added.");
     } catch (err) {
       toast(err.message || "Something went wrong.", "error");
     }
@@ -256,7 +268,7 @@ export default function IssueDetailPanel({
         throw new Error("Failed to remove issue link.");
       }
       await loadBug();
-      toast("Issue link removed.");
+      toast("Link removed.");
     } catch (err) {
       toast(err.message || "Something went wrong.", "error");
     }
@@ -308,337 +320,498 @@ export default function IssueDetailPanel({
 
   if (loading || !bug || !draft) {
     return (
-      <aside className="issue-detail-panel">
-        <div className="issue-detail-panel__header">
-          <h2>Loading issue...</h2>
-          <button type="button" className="btn subtle btn-compact" onClick={onClose}>
-            Close
-          </button>
+      <aside className="detail-panel" aria-busy="true">
+        <div className="detail-panel__header">
+          <div className="detail-panel__title">
+            <span className="detail-panel__eyebrow">Loading…</span>
+            <span className="detail-panel__name">Loading issue</span>
+          </div>
+          <div className="detail-panel__actions">
+            <button type="button" className="btn btn--ghost btn--icon" onClick={onClose} aria-label="Close">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6L6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div className="detail-panel__body">
+          <div className="skeleton-bar" style={{ width: "80%", height: "16px" }} />
+          <div className="skeleton-bar" style={{ height: "12px" }} />
+          <div className="skeleton-bar" style={{ width: "60%", height: "12px" }} />
         </div>
       </aside>
     );
   }
 
+  const projectKey = bug.project?.key || "ISSUE";
+
   return (
-    <aside className="issue-detail-panel">
-      <div className="issue-detail-panel__header">
-        <div>
-          <span className="issue-detail-panel__eyebrow">
-            {bug.project?.key || "UNSCOPED"} #{bug.id}
+    <aside className="detail-panel">
+      <div className="detail-panel__header">
+        <div className="detail-panel__title">
+          <span className="detail-panel__eyebrow">
+            {projectKey}-{bug.id} · {titleFromEnum(bug.issue_type)}
           </span>
-          <h2>{bug.title}</h2>
+          <span className="detail-panel__name">{bug.title}</span>
         </div>
-        <div className="issue-detail-panel__header-actions">
-          <button type="button" className="btn subtle btn-compact" onClick={() => void toggleWatch()}>
+        <div className="detail-panel__actions">
+          <button type="button" className="btn" onClick={() => void toggleWatch()}>
             {isWatching ? "Unwatch" : "Watch"}
+            {bug.watch_count > 0 && (
+              <span style={{ color: "var(--fg-subtle)" }}> · {bug.watch_count}</span>
+            )}
           </button>
-          <button type="button" className="btn subtle btn-compact" onClick={onClose}>
-            Close
+          <button
+            type="button"
+            className="btn btn--ghost btn--icon"
+            onClick={onClose}
+            aria-label="Close panel"
+            title="Close"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 6L6 18" />
+              <path d="M6 6l12 12" />
+            </svg>
           </button>
         </div>
       </div>
 
-      <div className="issue-detail-panel__body">
-        <section className="issue-section">
-          <div className="issue-section__header">
-            <h3>Issue fields</h3>
-            <button
-              type="button"
-              className="btn primary btn-compact"
-              onClick={() => void handleSave()}
-              disabled={saving}
-            >
-              {saving ? "Saving..." : "Save"}
-            </button>
+      <div className="detail-panel__body">
+        {/* Summary + Fields */}
+        <section className="detail-section">
+          <div className="detail-section__header">
+            <div className="detail-section__title">Details</div>
+            <div style={{ display: "flex", gap: "6px" }}>
+              {showEditor ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      resetDraft();
+                      setShowEditor(false);
+                    }}
+                    disabled={saving}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    onClick={() => void handleSave()}
+                    disabled={saving || !dirty}
+                  >
+                    {saving ? (
+                      <>
+                        <span className="spinner" aria-hidden />
+                        Saving…
+                      </>
+                    ) : (
+                      "Save changes"
+                    )}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setShowEditor(true)}
+                >
+                  Edit
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="issue-form-grid">
-            <label className="issue-form-grid__full">
-              <span className="label-text">Title</span>
-              <input
-                className="input-control"
-                value={draft.title}
-                onChange={(e) => handleDraftChange("title", e.target.value)}
-              />
-            </label>
-
-            <label className="issue-form-grid__full">
-              <span className="label-text">Description (Markdown)</span>
-              <textarea
-                className="input-control input-control--textarea issue-description-editor"
-                rows="6"
-                value={draft.description}
-                onChange={(e) => handleDraftChange("description", e.target.value)}
-              />
-            </label>
-
-            <div className="issue-form-grid__full">
-              <span className="label-text">Preview</span>
-              <MarkdownText
-                value={draft.description}
-                className="markdown-body issue-markdown-preview"
-                emptyText="Add markdown to preview the issue description."
-              />
-            </div>
-
-            <label>
-              <span className="label-text">Project</span>
-              <select
-                className="input-control"
-                value={draft.project_id}
-                onChange={(e) => handleDraftChange("project_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.key} - {project.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Issue type</span>
-              <select
-                className="input-control"
-                value={draft.issue_type}
-                onChange={(e) => handleDraftChange("issue_type", e.target.value)}
-              >
-                {ISSUE_TYPE_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {titleFromEnum(option)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Status</span>
-              <select
-                className="input-control"
-                value={draft.status}
-                onChange={(e) => handleDraftChange("status", e.target.value)}
-              >
-                {STATUS_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {titleFromEnum(option)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Priority</span>
-              <select
-                className="input-control"
-                value={draft.priority}
-                onChange={(e) => handleDraftChange("priority", e.target.value)}
-              >
-                {PRIORITY_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {titleFromEnum(option)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Story points</span>
-              <input
-                className="input-control"
-                type="number"
-                min="0"
-                value={draft.story_points}
-                onChange={(e) => handleDraftChange("story_points", e.target.value)}
-              />
-            </label>
-
-            <label>
-              <span className="label-text">Assignee</span>
-              <select
-                className="input-control"
-                value={draft.assignee_id}
-                onChange={(e) => handleDraftChange("assignee_id", e.target.value)}
-              >
-                <option value="">Unassigned</option>
-                {catalog?.users?.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.username}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Reporter</span>
-              <input
-                className="input-control"
-                value={bug.reporter?.username || "Unknown"}
-                disabled
-              />
-            </label>
-
-            <label>
-              <span className="label-text">Epic</span>
-              <select
-                className="input-control"
-                value={draft.epic_id}
-                onChange={(e) => handleDraftChange("epic_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {catalog?.epics?.map((epic) => (
-                  <option key={epic.id} value={epic.id}>
-                    {epic.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Sprint</span>
-              <select
-                className="input-control"
-                value={draft.sprint_id}
-                onChange={(e) => handleDraftChange("sprint_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {catalog?.sprints?.map((sprint) => (
-                  <option key={sprint.id} value={sprint.id}>
-                    {sprint.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Component</span>
-              <select
-                className="input-control"
-                value={draft.component_id}
-                onChange={(e) => handleDraftChange("component_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {catalog?.components?.map((component) => (
-                  <option key={component.id} value={component.id}>
-                    {component.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Fix version</span>
-              <select
-                className="input-control"
-                value={draft.fix_version_id}
-                onChange={(e) => handleDraftChange("fix_version_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {catalog?.versions?.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    {version.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Affects version</span>
-              <select
-                className="input-control"
-                value={draft.affects_version_id}
-                onChange={(e) => handleDraftChange("affects_version_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {catalog?.versions?.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    {version.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Parent issue</span>
-              <select
-                className="input-control"
-                value={draft.parent_bug_id}
-                onChange={(e) => handleDraftChange("parent_bug_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {projectIssues
-                  .filter((item) => item.id !== bug.id)
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      #{item.id} {item.title}
+          {showEditor ? (
+            <div className="fields-grid">
+              <label className="field field--full">
+                <span className="field__label">Title</span>
+                <input
+                  className="input"
+                  value={draft.title}
+                  onChange={(e) => handleDraftChange("title", e.target.value)}
+                />
+              </label>
+              <label className="field field--full">
+                <span className="field__label">Description (Markdown)</span>
+                <textarea
+                  className="textarea"
+                  rows={6}
+                  value={draft.description}
+                  onChange={(e) => handleDraftChange("description", e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span className="field__label">Project</span>
+                <select
+                  className="select"
+                  value={draft.project_id}
+                  onChange={(e) => handleDraftChange("project_id", e.target.value)}
+                >
+                  <option value="">None</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.key} — {project.name}
                     </option>
                   ))}
-              </select>
-            </label>
-
-            <label>
-              <span className="label-text">Due at</span>
-              <input
-                className="input-control"
-                type="datetime-local"
-                value={draft.due_at}
-                onChange={(e) => handleDraftChange("due_at", e.target.value)}
-              />
-            </label>
-
-            <label>
-              <span className="label-text">Reminder at</span>
-              <input
-                className="input-control"
-                type="datetime-local"
-                value={draft.reminder_at}
-                onChange={(e) => handleDraftChange("reminder_at", e.target.value)}
-              />
-            </label>
-
-            <div className="issue-form-grid__full">
-              <span className="label-text">Labels</span>
-              <div className="issue-label-picker">
-                {catalog?.labels?.map((label) => (
-                  <label key={label.id} className="issue-label-picker__item">
-                    <input
-                      type="checkbox"
-                      checked={draft.label_ids.includes(label.id)}
-                      onChange={() => handleLabelToggle(label.id)}
-                    />
-                    <span className="catalog-chip" style={{ background: label.color }} />
-                    <span>{label.name}</span>
-                  </label>
-                ))}
-                {catalog?.labels?.length === 0 && (
-                  <p className="issue-section__empty">No labels configured for this project yet.</p>
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Type</span>
+                <select
+                  className="select"
+                  value={draft.issue_type}
+                  onChange={(e) => handleDraftChange("issue_type", e.target.value)}
+                >
+                  {ISSUE_TYPE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {titleFromEnum(option)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Status</span>
+                <select
+                  className="select"
+                  value={draft.status}
+                  onChange={(e) => handleDraftChange("status", e.target.value)}
+                >
+                  {STATUS_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {titleFromEnum(option)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Priority</span>
+                <select
+                  className="select"
+                  value={draft.priority}
+                  onChange={(e) => handleDraftChange("priority", e.target.value)}
+                >
+                  {PRIORITY_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {titleFromEnum(option)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Story points</span>
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  value={draft.story_points}
+                  onChange={(e) => handleDraftChange("story_points", e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span className="field__label">Assignee</span>
+                <select
+                  className="select"
+                  value={draft.assignee_id}
+                  onChange={(e) => handleDraftChange("assignee_id", e.target.value)}
+                >
+                  <option value="">Unassigned</option>
+                  {catalog?.users?.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.username}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Reporter</span>
+                <input
+                  className="input"
+                  value={bug.reporter?.username || "Unknown"}
+                  disabled
+                />
+              </label>
+              <label className="field">
+                <span className="field__label">Epic</span>
+                <select
+                  className="select"
+                  value={draft.epic_id}
+                  onChange={(e) => handleDraftChange("epic_id", e.target.value)}
+                >
+                  <option value="">None</option>
+                  {catalog?.epics?.map((epic) => (
+                    <option key={epic.id} value={epic.id}>
+                      {epic.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Sprint</span>
+                <select
+                  className="select"
+                  value={draft.sprint_id}
+                  onChange={(e) => handleDraftChange("sprint_id", e.target.value)}
+                >
+                  <option value="">None</option>
+                  {catalog?.sprints?.map((sprint) => (
+                    <option key={sprint.id} value={sprint.id}>
+                      {sprint.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Component</span>
+                <select
+                  className="select"
+                  value={draft.component_id}
+                  onChange={(e) => handleDraftChange("component_id", e.target.value)}
+                >
+                  <option value="">None</option>
+                  {catalog?.components?.map((component) => (
+                    <option key={component.id} value={component.id}>
+                      {component.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Fix version</span>
+                <select
+                  className="select"
+                  value={draft.fix_version_id}
+                  onChange={(e) => handleDraftChange("fix_version_id", e.target.value)}
+                >
+                  <option value="">None</option>
+                  {catalog?.versions?.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {version.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Affects version</span>
+                <select
+                  className="select"
+                  value={draft.affects_version_id}
+                  onChange={(e) => handleDraftChange("affects_version_id", e.target.value)}
+                >
+                  <option value="">None</option>
+                  {catalog?.versions?.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {version.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Parent issue</span>
+                <select
+                  className="select"
+                  value={draft.parent_bug_id}
+                  onChange={(e) => handleDraftChange("parent_bug_id", e.target.value)}
+                >
+                  <option value="">None</option>
+                  {projectIssues
+                    .filter((item) => item.id !== bug.id)
+                    .map((item) => (
+                      <option key={item.id} value={item.id}>
+                        #{item.id} — {item.title}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">Due at</span>
+                <input
+                  className="input"
+                  type="datetime-local"
+                  value={draft.due_at}
+                  onChange={(e) => handleDraftChange("due_at", e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span className="field__label">Reminder at</span>
+                <input
+                  className="input"
+                  type="datetime-local"
+                  value={draft.reminder_at}
+                  onChange={(e) => handleDraftChange("reminder_at", e.target.value)}
+                />
+              </label>
+              {catalog?.labels && catalog.labels.length > 0 && (
+                <div className="field field--full">
+                  <span className="field__label">Labels</span>
+                  <div className="label-picker">
+                    {catalog.labels.map((label) => {
+                      const active = draft.label_ids.includes(label.id);
+                      return (
+                        <label
+                          key={label.id}
+                          className={`label-chip ${active ? "label-chip--active" : ""}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={active}
+                            onChange={() => handleLabelToggle(label.id)}
+                          />
+                          <span className="label-chip__dot" style={{ background: label.color }} />
+                          <span>{label.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <dl className="kv">
+              <div className="kv__key">Status</div>
+              <div className="kv__val">
+                <span className={`tag tag--status-${bug.status}`}>
+                  <span className="tag__dot" />
+                  {titleFromEnum(bug.status)}
+                </span>
+              </div>
+              <div className="kv__key">Priority</div>
+              <div className="kv__val">
+                <span className={`tag tag--priority-${bug.priority}`}>
+                  {titleFromEnum(bug.priority)}
+                </span>
+              </div>
+              <div className="kv__key">Assignee</div>
+              <div className="kv__val">
+                {bug.assignee ? (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                    <span className="avatar" aria-hidden>{userInitials(bug.assignee.username)}</span>
+                    {bug.assignee.username}
+                  </span>
+                ) : (
+                  <span className="kv__val--muted">Unassigned</span>
                 )}
               </div>
-            </div>
-          </div>
+              <div className="kv__key">Reporter</div>
+              <div className="kv__val">
+                {bug.reporter?.username || <span className="kv__val--muted">Unknown</span>}
+              </div>
+              <div className="kv__key">Project</div>
+              <div className="kv__val">
+                {bug.project ? (
+                  <>
+                    <span className="tag">{bug.project.key}</span> {bug.project.name}
+                  </>
+                ) : (
+                  <span className="kv__val--muted">None</span>
+                )}
+              </div>
+              <div className="kv__key">Epic</div>
+              <div className="kv__val">
+                {bug.epic?.name || <span className="kv__val--muted">—</span>}
+              </div>
+              <div className="kv__key">Sprint</div>
+              <div className="kv__val">
+                {bug.sprint?.name || <span className="kv__val--muted">—</span>}
+              </div>
+              <div className="kv__key">Component</div>
+              <div className="kv__val">
+                {bug.component?.name || <span className="kv__val--muted">—</span>}
+              </div>
+              <div className="kv__key">Fix version</div>
+              <div className="kv__val">
+                {bug.fix_version?.name || <span className="kv__val--muted">—</span>}
+              </div>
+              <div className="kv__key">Affects version</div>
+              <div className="kv__val">
+                {bug.affects_version?.name || <span className="kv__val--muted">—</span>}
+              </div>
+              <div className="kv__key">Story points</div>
+              <div className="kv__val">
+                {bug.story_points != null ? bug.story_points : <span className="kv__val--muted">—</span>}
+              </div>
+              <div className="kv__key">Due</div>
+              <div className="kv__val">
+                {bug.due_at ? formatDate(bug.due_at) : <span className="kv__val--muted">—</span>}
+              </div>
+              <div className="kv__key">Reminder</div>
+              <div className="kv__val">
+                {bug.reminder_at ? formatDate(bug.reminder_at) : <span className="kv__val--muted">—</span>}
+              </div>
+              <div className="kv__key">Labels</div>
+              <div className="kv__val">
+                {bug.labels && bug.labels.length > 0 ? (
+                  <div className="label-picker">
+                    {bug.labels.map((label) => (
+                      <span key={label.id} className="label-chip">
+                        <span className="label-chip__dot" style={{ background: label.color }} />
+                        {label.name}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="kv__val--muted">None</span>
+                )}
+              </div>
+              <div className="kv__key">Created</div>
+              <div className="kv__val kv__val--muted">{formatDate(bug.created_at)}</div>
+              <div className="kv__key">Updated</div>
+              <div className="kv__val kv__val--muted">{formatDate(bug.updated_at)}</div>
+            </dl>
+          )}
         </section>
 
-        <section className="issue-section">
-          <div className="issue-section__header">
-            <h3>Watchers and hierarchy</h3>
+        {/* Description */}
+        <section className="detail-section">
+          <div className="detail-section__header">
+            <div className="detail-section__title">Description</div>
           </div>
-          <div className="issue-meta-grid">
+          <MarkdownText
+            value={bug.description}
+            emptyText="No description. Click Edit to add one."
+          />
+        </section>
+
+        {/* Watchers & subtasks */}
+        <section className="detail-section">
+          <div className="detail-section__header">
+            <div className="detail-section__title">People & hierarchy</div>
+          </div>
+          <div className="fields-grid">
             <div>
-              <strong>Watchers</strong>
-              <ul className="mini-list">
-                {bug.watchers.map((watcher) => (
-                  <li key={watcher.id}>{watcher.username}</li>
-                ))}
-              </ul>
+              <div className="field__label" style={{ marginBottom: "6px" }}>
+                Watchers ({bug.watchers.length})
+              </div>
+              {bug.watchers.length === 0 ? (
+                <div className="detail-section__empty">No watchers.</div>
+              ) : (
+                <ul className="mini-list">
+                  {bug.watchers.map((watcher) => (
+                    <li key={watcher.id}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+                        <span className="avatar" aria-hidden>{userInitials(watcher.username)}</span>
+                        {watcher.username}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
             <div>
-              <strong>Subtasks</strong>
+              <div className="field__label" style={{ marginBottom: "6px" }}>
+                Subtasks ({bug.subtasks.length})
+              </div>
               {bug.subtasks.length === 0 ? (
-                <p className="issue-section__empty">No subtasks yet.</p>
+                <div className="detail-section__empty">No subtasks.</div>
               ) : (
                 <ul className="mini-list">
                   {bug.subtasks.map((item) => (
-                    <li key={item.id}>#{item.id} {item.title}</li>
+                    <li key={item.id}>
+                      <span>#{item.id} — {item.title}</span>
+                      <span className="mini-list__sub">{titleFromEnum(item.status)}</span>
+                    </li>
                   ))}
                 </ul>
               )}
@@ -646,22 +819,26 @@ export default function IssueDetailPanel({
           </div>
         </section>
 
-        <section className="issue-section">
-          <div className="issue-section__header">
-            <h3>Issue links</h3>
+        {/* Links */}
+        <section className="detail-section">
+          <div className="detail-section__header">
+            <div className="detail-section__title">Linked issues</div>
+            <div className="detail-section__count">{bug.links.length}</div>
           </div>
-          <div className="issue-link-form">
+          <div className="inline-row" style={{ marginBottom: "10px", gap: "6px" }}>
             <input
-              className="input-control"
+              className="input"
               type="number"
-              placeholder="Target issue id"
+              placeholder="Issue id"
               value={linkForm.target_bug_id}
               onChange={(e) => setLinkForm((prev) => ({ ...prev, target_bug_id: e.target.value }))}
+              style={{ width: "110px" }}
             />
             <select
-              className="input-control"
+              className="select"
               value={linkForm.link_type}
               onChange={(e) => setLinkForm((prev) => ({ ...prev, link_type: e.target.value }))}
+              style={{ width: "130px" }}
             >
               {LINK_TYPE_OPTIONS.map((option) => (
                 <option key={option} value={option}>
@@ -669,27 +846,35 @@ export default function IssueDetailPanel({
                 </option>
               ))}
             </select>
-            <button type="button" className="btn subtle" onClick={() => void handleAddLink()}>
-              Add link
+            <button type="button" className="btn" onClick={() => void handleAddLink()}>
+              Link
             </button>
           </div>
           {bug.links.length === 0 ? (
-            <p className="issue-section__empty">No links yet.</p>
+            <div className="detail-section__empty">No links.</div>
           ) : (
-            <ul className="issue-link-list">
+            <ul className="mini-list">
               {bug.links.map((link) => (
-                <li key={link.id} className="issue-link-list__item">
+                <li key={link.id}>
                   <span>
-                    {titleFromEnum(link.link_type)} {link.direction === "outgoing" ? "to" : "from"} #
-                    {link.bug.id} {link.bug.title}
+                    <strong style={{ fontWeight: 500 }}>{titleFromEnum(link.link_type)}</strong>
+                    <span style={{ color: "var(--fg-subtle)" }}>
+                      {" "}
+                      {link.direction === "outgoing" ? "→" : "←"} #{link.bug.id}{" "}
+                    </span>
+                    {link.bug.title}
                   </span>
                   {link.direction === "outgoing" && (
                     <button
                       type="button"
-                      className="btn subtle btn-compact"
+                      className="btn btn--ghost btn--icon"
+                      aria-label="Remove link"
                       onClick={() => void handleDeleteLink(link.id)}
                     >
-                      Remove
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 6L6 18" />
+                        <path d="M6 6l12 12" />
+                      </svg>
                     </button>
                   )}
                 </li>
@@ -698,54 +883,84 @@ export default function IssueDetailPanel({
           )}
         </section>
 
-        <section className="issue-section">
-          <div className="issue-section__header">
-            <h3>Attachments</h3>
+        {/* Attachments */}
+        <section className="detail-section">
+          <div className="detail-section__header">
+            <div className="detail-section__title">Attachments</div>
+            <div className="detail-section__count">{bug.attachments.length}</div>
           </div>
-          <label className="attachment-upload">
-            <span className="label-text">Add attachment</span>
+          <label className="file-drop">
             <input type="file" onChange={(e) => void handleUploadAttachment(e)} disabled={uploading} />
+            <div>
+              {uploading ? (
+                <>
+                  <span className="spinner" aria-hidden /> Uploading…
+                </>
+              ) : (
+                <>
+                  <strong>Upload a file</strong> · drag & drop or click to select
+                </>
+              )}
+            </div>
           </label>
           {bug.attachments.length === 0 ? (
-            <p className="issue-section__empty">No attachments yet.</p>
+            <div className="detail-section__empty">No attachments.</div>
           ) : (
-            <ul className="issue-link-list">
+            <ul className="attach-list">
               {bug.attachments.map((attachment) => (
-                <li key={attachment.id} className="issue-link-list__item">
-                  <a href={`${API_BASE_URL}${attachment.download_url}`} target="_blank" rel="noreferrer">
-                    {attachment.original_name}
-                  </a>
-                  <div className="issue-link-list__actions">
-                    <span>{Math.round(attachment.size_bytes / 1024)} KB</span>
-                    <button
-                      type="button"
-                      className="btn subtle btn-compact"
-                      onClick={() => void handleDeleteAttachment(attachment.id)}
+                <li key={attachment.id} className="attach-item">
+                  <span className="attach-item__icon" aria-hidden>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 12.79V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6.21" />
+                      <path d="M15 3h6v6" />
+                      <path d="M10 14 21 3" />
+                    </svg>
+                  </span>
+                  <div className="attach-item__info">
+                    <a
+                      className="attach-item__name"
+                      href={`${API_BASE_URL}${attachment.download_url}`}
+                      target="_blank"
+                      rel="noreferrer"
                     >
-                      Delete
-                    </button>
+                      {attachment.original_name}
+                    </a>
+                    <span className="attach-item__size">
+                      {Math.max(1, Math.round(attachment.size_bytes / 1024))} KB
+                      {attachment.uploaded_by && ` · ${attachment.uploaded_by.username}`}
+                    </span>
                   </div>
+                  <button
+                    type="button"
+                    className="btn btn--danger"
+                    onClick={() => void handleDeleteAttachment(attachment.id)}
+                  >
+                    Delete
+                  </button>
                 </li>
               ))}
             </ul>
           )}
         </section>
 
-        <section className="issue-section">
-          <div className="issue-section__header">
-            <h3>Activity feed</h3>
+        {/* Activity */}
+        <section className="detail-section">
+          <div className="detail-section__header">
+            <div className="detail-section__title">Activity</div>
+            <div className="detail-section__count">{activity.length}</div>
           </div>
           {activity.length === 0 ? (
-            <p className="issue-section__empty">No activity yet.</p>
+            <div className="detail-section__empty">No activity yet.</div>
           ) : (
             <ul className="activity-list">
               {activity.map((event) => (
-                <li key={event.id} className="activity-list__item">
-                  <div>
-                    <strong>{event.summary}</strong>
-                    <p>
+                <li key={event.id} className="activity-item">
+                  <span className="activity-item__bullet" aria-hidden />
+                  <div className="activity-item__content">
+                    <div className="activity-item__summary">{event.summary}</div>
+                    <div className="activity-item__meta">
                       {event.actor?.username || "System"} · {formatDate(event.created_at)}
-                    </p>
+                    </div>
                   </div>
                 </li>
               ))}
@@ -753,12 +968,18 @@ export default function IssueDetailPanel({
           )}
         </section>
 
-        <CommentThread
-          bugId={bug.id}
-          auth={auth}
-          fetchWithAuth={fetchWithAuth}
-          mentionableUsers={catalog?.users || []}
-        />
+        {/* Comments */}
+        <section className="detail-section">
+          <div className="detail-section__header">
+            <div className="detail-section__title">Comments</div>
+          </div>
+          <CommentThread
+            bugId={bug.id}
+            auth={auth}
+            fetchWithAuth={fetchWithAuth}
+            mentionableUsers={catalog?.users || []}
+          />
+        </section>
       </div>
     </aside>
   );
