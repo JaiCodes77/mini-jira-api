@@ -143,13 +143,15 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
                     <button
                       type="button"
                       className="btn btn--ghost"
+                      aria-label={`Edit comment by ${comment.author.username}`}
                       onClick={() => handleEditStart(comment)}
                     >
                       Edit
                     </button>
                     <button
                       type="button"
-                      className="btn btn--ghost"
+                      className="btn btn--danger"
+                      aria-label={`Delete comment by ${comment.author.username}`}
                       onClick={() => void handleDelete(comment.id)}
                     >
                       Delete
@@ -158,14 +160,15 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
                 )}
               </div>
               {isEditing ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div className="comment-edit">
                   <textarea
                     className="textarea"
                     rows={3}
+                    aria-label="Edit comment"
                     value={editBody}
                     onChange={(e) => setEditBody(e.target.value)}
                   />
-                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  <div className="comment-edit__actions">
                     <button
                       type="button"
                       className="btn"
@@ -230,6 +233,7 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
           <textarea
             className="textarea"
             rows={3}
+            aria-label="Write a comment"
             placeholder="Write a comment. Use @username to mention teammates."
             value={body}
             onChange={(e) => setBody(e.target.value)}

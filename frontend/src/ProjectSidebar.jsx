@@ -113,6 +113,13 @@ export default function ProjectSidebar({
 
   return (
     <aside className="sidebar" aria-label="Projects">
+      <div className="sidebar__masthead">
+        <span className="sidebar__eyebrow">Workspace</span>
+        <span className="sidebar__title">
+          {projects.length} project{projects.length === 1 ? "" : "s"}
+        </span>
+      </div>
+
       <div className="sidebar__section">
         <div className="sidebar__heading">
           <span>Views</span>
@@ -140,7 +147,7 @@ export default function ProjectSidebar({
         </div>
       </div>
 
-      <div className="sidebar__section" style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div className="sidebar__section sidebar__section--fill">
         <div className="sidebar__heading">
           <span>Projects</span>
           <button
@@ -158,7 +165,7 @@ export default function ProjectSidebar({
         </div>
         <div className="sidebar__list">
           {projects.length === 0 && !showCreate && (
-            <div style={{ padding: "12px 10px", fontSize: "12px", color: "var(--fg-subtle)" }}>
+            <div className="sidebar__empty">
               No projects yet. Click + to create one.
             </div>
           )}
@@ -167,7 +174,7 @@ export default function ProjectSidebar({
             const isEditing = editingId === project.id;
             if (isEditing) {
               return (
-                <form key={project.id} className="sidebar__form" onSubmit={handleEdit} style={{ padding: "8px" }}>
+                <form key={project.id} className="sidebar__form sidebar__form--padded" onSubmit={handleEdit}>
                   <input
                     className="input"
                     placeholder="Name"
@@ -190,8 +197,8 @@ export default function ProjectSidebar({
                     value={editForm.description}
                     onChange={(e) => setEditForm((p) => ({ ...p, description: e.target.value }))}
                   />
-                  <div style={{ display: "flex", gap: "6px" }}>
-                    <button type="submit" className="btn btn--primary" style={{ flex: 1 }}>
+                  <div className="sidebar__form-actions">
+                    <button type="submit" className="btn btn--primary btn--grow">
                       Save
                     </button>
                     <button
@@ -254,7 +261,7 @@ export default function ProjectSidebar({
         </div>
 
         {showCreate && (
-          <form className="sidebar__form" onSubmit={handleCreate} style={{ padding: "10px" }}>
+          <form className="sidebar__form sidebar__form--padded" onSubmit={handleCreate}>
             <input
               className="input"
               type="text"
@@ -280,12 +287,11 @@ export default function ProjectSidebar({
               value={form.description}
               onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
             />
-            <div style={{ display: "flex", gap: "6px" }}>
+            <div className="sidebar__form-actions">
               <button
                 type="submit"
-                className="btn btn--primary"
+                className="btn btn--primary btn--grow"
                 disabled={submitting}
-                style={{ flex: 1 }}
               >
                 {submitting ? "Creating…" : "Create"}
               </button>

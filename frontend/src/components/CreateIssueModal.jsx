@@ -48,7 +48,7 @@ export default function CreateIssueModal({
       footer={footer}
       size="wide"
     >
-      <form id="create-issue-form" onSubmit={onSubmit} className="fields-grid">
+      <form id="create-issue-form" onSubmit={onSubmit} className="fields-grid create-issue-form">
         <label className="field field--full">
           <span className="field__label">Title</span>
           <input

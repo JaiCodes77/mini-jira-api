@@ -16,6 +16,18 @@ export default function IssueFiltersBar({
   activeFilterCount,
   selectedProjectCatalog,
 }) {
+  const activeChips = [
+    filterForm.status !== "all" && `Status: ${titleFromEnum(filterForm.status)}`,
+    filterForm.priority !== "all" && `Priority: ${titleFromEnum(filterForm.priority)}`,
+    filterForm.issueType !== "all" && `Type: ${titleFromEnum(filterForm.issueType)}`,
+    filterForm.assigneeId !== "all" &&
+      `Assignee: ${
+        selectedProjectCatalog?.users?.find(
+          (user) => String(user.id) === String(filterForm.assigneeId),
+        )?.username || "Selected"
+      }`,
+  ].filter(Boolean);
+
   return (
     <form className="filter-bar" onSubmit={onApply} role="search">
       <div className="filter-bar__search">
@@ -30,7 +42,27 @@ export default function IssueFiltersBar({
           value={filterForm.search}
           onChange={(e) => onFilterChange("search", e.target.value)}
         />
+        {filterForm.search && (
+          <button
+            type="button"
+            className="filter-bar__search-clear"
+            aria-label="Clear search"
+            onClick={() => onFilterChange("search", "")}
+          >
+            x
+          </button>
+        )}
       </div>
+
+      {activeChips.length > 0 && (
+        <div className="filter-bar__chips" aria-label="Active filters">
+          {activeChips.map((chip) => (
+            <span key={chip} className="filter-chip">
+              {chip}
+            </span>
+          ))}
+        </div>
+      )}
 
       <div className="filter-bar__select">
         <select
@@ -113,7 +145,7 @@ export default function IssueFiltersBar({
         </select>
       </div>
 
-      <div className="filter-bar__select" style={{ minWidth: "80px" }}>
+      <div className="filter-bar__select filter-bar__select--order">
         <select
           className="select"
           aria-label="Order"

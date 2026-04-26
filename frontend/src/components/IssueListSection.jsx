@@ -92,19 +92,22 @@ export default function IssueListSection({
           return (
             <li key={bug.id}>
               <div
-                className="issue-row"
+                className={`issue-row issue-row--${bug.priority} ${
+                  isActive ? "issue-row--active" : ""
+                }`}
                 role="button"
                 tabIndex={0}
                 aria-current={isActive ? "true" : undefined}
                 onClick={() => onNavigateIssue(bug.id)}
                 onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
                     onNavigateIssue(bug.id);
                   }
                 }}
-                style={isActive ? { background: "var(--bg-active)" } : undefined}
               >
+                <span className="issue-row__priority-rail" aria-hidden />
                 <span className="issue-row__id">
                   {bug.project?.key ? `${bug.project.key}-${bug.id}` : `#${bug.id}`}
                 </span>

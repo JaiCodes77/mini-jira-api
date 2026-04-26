@@ -107,6 +107,30 @@ export default function Dashboard() {
     () => projects.find((project) => project.id === selectedProjectId) || null,
     [projects, selectedProjectId],
   );
+  const visibleIssueMetrics = useMemo(() => {
+    const counts = bugs.reduce(
+      (acc, bug) => {
+        acc[bug.status] = (acc[bug.status] || 0) + 1;
+        if (bug.priority === "high") acc.high += 1;
+        if (!bug.assignee_id && !bug.assignee?.username) acc.unassigned += 1;
+        return acc;
+      },
+      { open: 0, in_progress: 0, closed: 0, high: 0, unassigned: 0 },
+    );
+
+    return [
+      { label: "Total issues", value: totalBugs, tone: "total" },
+      { label: "Open visible", value: counts.open, tone: "open" },
+      { label: "In progress", value: counts.in_progress, tone: "progress" },
+      { label: "High priority", value: counts.high, tone: "high" },
+      { label: "Unassigned", value: counts.unassigned, tone: "neutral" },
+    ];
+  }, [bugs, totalBugs]);
+  const pageDescription =
+    selectedProject?.description ||
+    (selectedProject
+      ? `${selectedProject.key} backlog, planning, and delivery signal.`
+      : "Cross-project issues, ownership, and delivery signal.");
   const effectiveCreateProjectId = form.project_id
     ? Number(form.project_id)
     : selectedProjectId;
@@ -486,17 +510,21 @@ export default function Dashboard() {
 
         <main className={`main ${bugId ? "main--with-detail" : ""}`}>
           <div className="page__header">
-            <div className="page__title-row">
-              <h1 className="page__title">
-                {selectedProject ? selectedProject.name : "All issues"}
-              </h1>
-              <span className="page__meta">
-                <strong>{totalBugs}</strong>
-                {totalBugs === 1 ? " issue" : " issues"}
-                {activeFilterCount > 0 && (
-                  <> · {activeFilterCount} filter{activeFilterCount === 1 ? "" : "s"}</>
-                )}
-              </span>
+            <div className="page__header-main">
+              <div className="page__title-row">
+                <h1 className="page__title">
+                  {selectedProject ? selectedProject.name : "All issues"}
+                </h1>
+                <span className="page__state">List view</span>
+                <span className="page__meta">
+                  <strong>{totalBugs}</strong>
+                  {totalBugs === 1 ? " issue" : " issues"}
+                  {activeFilterCount > 0 && (
+                    <> · {activeFilterCount} filter{activeFilterCount === 1 ? "" : "s"}</>
+                  )}
+                </span>
+              </div>
+              <p className="page__description">{pageDescription}</p>
             </div>
             <div className="page__actions">
               {selectedProject && isOwner && (
@@ -511,6 +539,14 @@ export default function Dashboard() {
               <button type="button" className="btn btn--primary" onClick={openCreate}>
                 New issue
               </button>
+            </div>
+            <div className="page__summary" aria-label="Visible issue summary">
+              {visibleIssueMetrics.map((metric) => (
+                <div key={metric.label} className={`metric metric--${metric.tone}`}>
+                  <span className="metric__value">{metric.value}</span>
+                  <span className="metric__label">{metric.label}</span>
+                </div>
+              ))}
             </div>
           </div>
 

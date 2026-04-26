@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useId } from "react";
 
 export default function Modal({
   title,
@@ -8,6 +8,9 @@ export default function Modal({
   footer,
   size = "md",
 }) {
+  const titleId = useId();
+  const subtitleId = useId();
+
   useEffect(() => {
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
@@ -33,14 +36,16 @@ export default function Modal({
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label={typeof title === "string" ? title : "Dialog"}
+      aria-labelledby={title ? titleId : undefined}
+      aria-describedby={subtitle ? subtitleId : undefined}
+      aria-label={!title && typeof title === "string" ? title : !title ? "Dialog" : undefined}
       onMouseDown={handleBackdropClick}
     >
       <div className={`modal ${size === "wide" ? "modal--wide" : ""}`}>
         <div className="modal__header">
           <div>
-            {title && <div className="modal__title">{title}</div>}
-            {subtitle && <div className="modal__subtitle">{subtitle}</div>}
+            {title && <div id={titleId} className="modal__title">{title}</div>}
+            {subtitle && <div id={subtitleId} className="modal__subtitle">{subtitle}</div>}
           </div>
           <button
             type="button"

@@ -6,11 +6,15 @@ export default function MarkdownText({
   className = "markdown",
   emptyText = "No description.",
 }) {
+  const resolvedClassName = className.includes("markdown")
+    ? className
+    : `markdown ${className}`;
+
   if (!value || !value.trim()) {
-    return <p className={`${className} markdown--muted`}>{emptyText}</p>;
+    return <p className={`${resolvedClassName} markdown--muted`}>{emptyText}</p>;
   }
   return (
-    <div className={className}>
+    <div className={resolvedClassName}>
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
     </div>
   );

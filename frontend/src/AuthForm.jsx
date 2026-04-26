@@ -18,6 +18,7 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const handleLogin = async (event) => {
@@ -110,11 +111,10 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
 
   return (
     <>
-      <div className="auth__tabs" role="tablist">
+      <div className="auth__tabs" aria-label="Authentication mode">
         <button
           type="button"
-          role="tab"
-          aria-selected={mode === "login"}
+          aria-pressed={mode === "login"}
           className={`auth__tab ${mode === "login" ? "auth__tab--active" : ""}`}
           onClick={() => setMode("login")}
         >
@@ -122,8 +122,7 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
         </button>
         <button
           type="button"
-          role="tab"
-          aria-selected={mode === "register"}
+          aria-pressed={mode === "register"}
           className={`auth__tab ${mode === "register" ? "auth__tab--active" : ""}`}
           onClick={() => setMode("register")}
         >
@@ -162,15 +161,25 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
 
         <label className="field">
           <span className="field__label">Password</span>
-          <input
-            className="input"
-            type="password"
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={busy}
-            placeholder="••••••••"
-          />
+          <span className="password-field">
+            <input
+              className="input"
+              type={showPassword ? "text" : "password"}
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={busy}
+              placeholder="••••••••"
+            />
+            <button
+              type="button"
+              className="password-field__toggle"
+              onClick={() => setShowPassword((value) => !value)}
+              disabled={busy || !password}
+            >
+              {showPassword ? "Hide" : "Show"}
+            </button>
+          </span>
         </label>
 
         <button type="submit" className="btn btn--primary btn--lg btn--block" disabled={busy}>
@@ -191,8 +200,7 @@ export default function AuthForm({ apiBaseUrl, onAuthenticated }) {
         {mode === "login" ? "New here?" : "Already have an account?"}{" "}
         <button
           type="button"
-          className="btn btn--ghost"
-          style={{ height: "auto", padding: 0, fontSize: "inherit", color: "var(--fg-muted)", textDecoration: "underline" }}
+          className="auth__footer-action"
           onClick={() => setMode(mode === "login" ? "register" : "login")}
         >
           {mode === "login" ? "Create an account" : "Sign in instead"}
