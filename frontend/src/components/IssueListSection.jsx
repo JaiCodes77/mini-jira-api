@@ -109,7 +109,7 @@ export default function IssueListSection({
               >
                 <span className="issue-row__priority-rail" aria-hidden />
                 <span className="issue-row__id">
-                  {bug.project?.key ? `${bug.project.key}-${bug.id}` : `#${bug.id}`}
+                  {bug.issue_key || (bug.project?.key ? `${bug.project.key}-${bug.id}` : `#${bug.id}`)}
                 </span>
                 <span className="issue-row__type">
                   {titleFromEnum(bug.issue_type)}

@@ -29,9 +29,26 @@ app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(autouse=True)
 def _setup_db():
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture()
+def deactivate_user():
+    from app import models
+
+    def _deactivate(username: str) -> None:
+        db = TestingSessionLocal()
+        try:
+            user = db.query(models.User).filter(models.User.username == username).one()
+            user.is_active = False
+            db.commit()
+        finally:
+            db.close()
+
+    return _deactivate
 
 
 @pytest_asyncio.fixture()

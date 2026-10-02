@@ -1,4 +1,3 @@
-import os
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, status
@@ -7,12 +6,13 @@ import bcrypt
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app import models
 
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-me-use-env-var")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+SECRET_KEY = settings.jwt_secret_key
+ALGORITHM = settings.jwt_algorithm
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -50,6 +50,6 @@ def get_current_user(
         raise credentials_exception
 
     user = db.query(models.User).filter(models.User.id == user_id).first()
-    if user is None:
+    if user is None or not user.is_active:
         raise credentials_exception
     return user
