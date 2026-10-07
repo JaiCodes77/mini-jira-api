@@ -113,40 +113,6 @@ export default function ProjectSidebar({
 
   return (
     <aside className="sidebar" aria-label="Projects">
-      <div className="sidebar__masthead">
-        <span className="sidebar__eyebrow">Workspace</span>
-        <span className="sidebar__title">
-          {projects.length} project{projects.length === 1 ? "" : "s"}
-        </span>
-      </div>
-
-      <div className="sidebar__section">
-        <div className="sidebar__heading">
-          <span>Views</span>
-        </div>
-        <div className="sidebar__list">
-          <div
-            className={`sidebar__item ${selectedProjectId === null ? "sidebar__item--active" : ""}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => onSelectProject(null)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onSelectProject(null);
-              }
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M3 6h18" />
-              <path d="M3 12h18" />
-              <path d="M3 18h18" />
-            </svg>
-            <span className="sidebar__item-label">All issues</span>
-          </div>
-        </div>
-      </div>
-
       <div className="sidebar__section sidebar__section--fill">
         <div className="sidebar__heading">
           <span>Projects</span>
@@ -164,6 +130,20 @@ export default function ProjectSidebar({
           </button>
         </div>
         <div className="sidebar__list">
+          <div
+            className={`sidebar__item ${selectedProjectId === null ? "sidebar__item--active" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => onSelectProject(null)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelectProject(null);
+              }
+            }}
+          >
+            <span className="sidebar__item-label sidebar__item-label--solo">All issues</span>
+          </div>
           {projects.length === 0 && !showCreate && (
             <div className="sidebar__empty">
               No projects yet. Click + to create one.

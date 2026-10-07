@@ -36,15 +36,6 @@ const INITIAL_FORM_STATE = {
   label_ids: [],
 };
 
-const hasFiltersChanged = (candidate, reference) =>
-  candidate.search !== reference.search ||
-  candidate.status !== reference.status ||
-  candidate.priority !== reference.priority ||
-  candidate.issueType !== reference.issueType ||
-  candidate.assigneeId !== reference.assigneeId ||
-  candidate.sortBy !== reference.sortBy ||
-  candidate.order !== reference.order;
-
 const countActiveFilters = (filters) =>
   [
     filters.search.trim() !== "",
@@ -117,21 +108,10 @@ export default function Dashboard() {
     () => projects.find((project) => project.id === selectedProjectId) || null,
     [projects, selectedProjectId],
   );
-  const visibleIssueMetrics = useMemo(
-    () => [
-      { label: "Total issues", value: summary?.total ?? totalBugs, tone: "total" },
-      { label: "Open", value: summary?.open ?? 0, tone: "open" },
-      { label: "In progress", value: summary?.in_progress ?? 0, tone: "progress" },
-      { label: "High priority", value: summary?.high_priority ?? 0, tone: "high" },
-      { label: "Unassigned", value: summary?.unassigned ?? 0, tone: "neutral" },
-    ],
-    [summary, totalBugs],
-  );
-  const pageDescription =
-    selectedProject?.description ||
-    (selectedProject
-      ? `${selectedProject.key} backlog, planning, and delivery signal.`
-      : "Cross-project issues, ownership, and delivery signal.");
+  const countLine =
+    activeFilterCount > 0
+      ? `${totalBugs} matching ${totalBugs === 1 ? "issue" : "issues"}`
+      : `${totalBugs} ${totalBugs === 1 ? "issue" : "issues"}, ${summary?.open ?? 0} open, ${summary?.in_progress ?? 0} in progress, ${summary?.high_priority ?? 0} high priority`;
   const effectiveCreateProjectId = form.project_id
     ? Number(form.project_id)
     : selectedProjectId;
@@ -144,11 +124,6 @@ export default function Dashboard() {
     }
     return createFormCatalog;
   }, [createFormCatalog, effectiveCreateProjectId, selectedProjectCatalog]);
-  const filtersDirty = useMemo(
-    () => hasFiltersChanged(filterForm, activeFilters),
-    [filterForm, activeFilters],
-  );
-
   const fetchWithAuth = useCallback(
     async (url, options = {}) => {
       const headers = {
@@ -323,6 +298,8 @@ export default function Dashboard() {
 
   const handleFilterFieldChange = useCallback((field, value) => {
     setFilterForm((prev) => ({ ...prev, [field]: value }));
+    setActiveFilters((prev) => ({ ...prev, [field]: value }));
+    setCurrentPage(0);
   }, []);
 
   const handleFormFieldChange = useCallback((field, value) => {
@@ -526,23 +503,8 @@ export default function Dashboard() {
       </a>
 
       <header className="topbar">
-        <div className="topbar__left">
-          <div className="topbar__brand">
-            <span className="topbar__mark" aria-hidden>J</span>
-            <span>Mini Jira</span>
-          </div>
-          <span className="topbar__divider" aria-hidden />
-          <div className="topbar__context">
-            {selectedProject ? (
-              <>
-                <span className="topbar__context-key">{selectedProject.key}</span>
-                <span>·</span>
-                <span>{selectedProject.name}</span>
-              </>
-            ) : (
-              <span>All issues</span>
-            )}
-          </div>
+        <div className="topbar__brand">
+          <span className="topbar__mark">Mini Jira</span>
         </div>
         <div className="topbar__right">
           <NotificationCenter fetchWithAuth={fetchWithAuth} />
@@ -568,66 +530,48 @@ export default function Dashboard() {
         <main className={`main ${bugId ? "main--with-detail" : ""}`}>
           <div className="page__header">
             <div className="page__header-main">
-              <div className="page__title-row">
-                <h1 className="page__title">
-                  {selectedProject ? selectedProject.name : "All issues"}
-                </h1>
-                <div className="view-toggle" role="tablist" aria-label="Issue view">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={view === "list"}
-                    className={view === "list" ? "is-active" : ""}
-                    onClick={() => setView("list")}
-                  >
-                    List
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={view === "board"}
-                    className={view === "board" ? "is-active" : ""}
-                    onClick={() => setView("board")}
-                  >
-                    Board
-                  </button>
-                </div>
-                <span className="page__meta">
-                  <strong>{totalBugs}</strong>
-                  {totalBugs === 1 ? " issue" : " issues"}
-                  {activeFilterCount > 0 && (
-                    <> · {activeFilterCount} filter{activeFilterCount === 1 ? "" : "s"}</>
-                  )}
-                </span>
-              </div>
-              <p className="page__description">{pageDescription}</p>
+              <h1 className="page__title">
+                {selectedProject ? selectedProject.name : "All issues"}
+              </h1>
+              <p className="page__description">{countLine}</p>
+              {selectedProject?.description && (
+                <p className="page__note">{selectedProject.description}</p>
+              )}
             </div>
             <div className="page__actions">
+              <div className="view-toggle" role="tablist" aria-label="Issue view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={view === "list"}
+                  className={view === "list" ? "is-active" : ""}
+                  onClick={() => setView("list")}
+                >
+                  List
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={view === "board"}
+                  className={view === "board" ? "is-active" : ""}
+                  onClick={() => setView("board")}
+                >
+                  Board
+                </button>
+              </div>
               {selectedProject && (
                 <button type="button" className="btn" onClick={() => setMembersOpen(true)}>
                   People
                 </button>
               )}
               {selectedProject && isOwner && (
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => setCatalogOpen(true)}
-                >
+                <button type="button" className="btn" onClick={() => setCatalogOpen(true)}>
                   Planning
                 </button>
               )}
               <button type="button" className="btn btn--primary" onClick={openCreate}>
                 New issue
               </button>
-            </div>
-            <div className="page__summary" aria-label="Visible issue summary">
-              {visibleIssueMetrics.map((metric) => (
-                <div key={metric.label} className={`metric metric--${metric.tone}`}>
-                  <span className="metric__value">{metric.value}</span>
-                  <span className="metric__label">{metric.label}</span>
-                </div>
-              ))}
             </div>
           </div>
 
@@ -636,7 +580,6 @@ export default function Dashboard() {
             onFilterChange={handleFilterFieldChange}
             onApply={handleApplyFilters}
             onClear={handleClearFilters}
-            filtersDirty={filtersDirty}
             activeFilterCount={activeFilterCount}
             selectedProjectCatalog={selectedProjectCatalog}
           />

@@ -393,16 +393,15 @@ export default function IssueDetailPanel({
       <div className="detail-panel__header">
         <div className="detail-panel__title">
           <span className="detail-panel__eyebrow">
-            {projectKey}-{bug.id} · {titleFromEnum(bug.issue_type)}
+            {bug.issue_key || `${projectKey}-${bug.id}`}
           </span>
+          <span className="detail-panel__kind">{titleFromEnum(bug.issue_type)}</span>
           <span className="detail-panel__name">{bug.title}</span>
         </div>
         <div className="detail-panel__actions">
           <button type="button" className="btn" onClick={() => void toggleWatch()}>
             {isWatching ? "Unwatch" : "Watch"}
-            {bug.watch_count > 0 && (
-              <span style={{ color: "var(--fg-subtle)" }}> · {bug.watch_count}</span>
-            )}
+            {bug.watch_count > 0 && <span className="btn__count">{bug.watch_count}</span>}
           </button>
           <button
             type="button"
@@ -750,53 +749,69 @@ export default function IssueDetailPanel({
                   <span className="kv__val--muted">None</span>
                 )}
               </div>
-              <div className="kv__key">Epic</div>
-              <div className="kv__val">
-                {bug.epic?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Sprint</div>
-              <div className="kv__val">
-                {bug.sprint?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Component</div>
-              <div className="kv__val">
-                {bug.component?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Fix version</div>
-              <div className="kv__val">
-                {bug.fix_version?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Affects version</div>
-              <div className="kv__val">
-                {bug.affects_version?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Story points</div>
-              <div className="kv__val">
-                {bug.story_points != null ? bug.story_points : <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Due</div>
-              <div className="kv__val">
-                {bug.due_at ? formatDate(bug.due_at) : <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Reminder</div>
-              <div className="kv__val">
-                {bug.reminder_at ? formatDate(bug.reminder_at) : <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Labels</div>
-              <div className="kv__val">
-                {bug.labels && bug.labels.length > 0 ? (
-                  <div className="label-picker">
-                    {bug.labels.map((label) => (
-                      <span key={label.id} className="label-chip">
-                        <span className="label-chip__dot" style={{ background: label.color }} />
-                        {label.name}
-                      </span>
-                    ))}
+              {bug.epic?.name && (
+                <>
+                  <div className="kv__key">Epic</div>
+                  <div className="kv__val">{bug.epic.name}</div>
+                </>
+              )}
+              {bug.sprint?.name && (
+                <>
+                  <div className="kv__key">Sprint</div>
+                  <div className="kv__val">{bug.sprint.name}</div>
+                </>
+              )}
+              {bug.component?.name && (
+                <>
+                  <div className="kv__key">Component</div>
+                  <div className="kv__val">{bug.component.name}</div>
+                </>
+              )}
+              {bug.fix_version?.name && (
+                <>
+                  <div className="kv__key">Fix version</div>
+                  <div className="kv__val">{bug.fix_version.name}</div>
+                </>
+              )}
+              {bug.affects_version?.name && (
+                <>
+                  <div className="kv__key">Affects version</div>
+                  <div className="kv__val">{bug.affects_version.name}</div>
+                </>
+              )}
+              {bug.story_points != null && (
+                <>
+                  <div className="kv__key">Story points</div>
+                  <div className="kv__val">{bug.story_points}</div>
+                </>
+              )}
+              {bug.due_at && (
+                <>
+                  <div className="kv__key">Due</div>
+                  <div className="kv__val">{formatDate(bug.due_at)}</div>
+                </>
+              )}
+              {bug.reminder_at && (
+                <>
+                  <div className="kv__key">Reminder</div>
+                  <div className="kv__val">{formatDate(bug.reminder_at)}</div>
+                </>
+              )}
+              {bug.labels?.length > 0 && (
+                <>
+                  <div className="kv__key">Labels</div>
+                  <div className="kv__val">
+                    <div className="label-picker">
+                      {bug.labels.map((label) => (
+                        <span key={label.id} className="label-chip">
+                          <span className="label-chip__dot" style={{ background: label.color }} />
+                          {label.name}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                ) : (
-                  <span className="kv__val--muted">None</span>
-                )}
-              </div>
+                </>
+              )}
               <div className="kv__key">Created</div>
               <div className="kv__val kv__val--muted">{formatDate(bug.created_at)}</div>
               <div className="kv__key">Updated</div>
@@ -806,7 +821,7 @@ export default function IssueDetailPanel({
         </section>
 
         {/* Description */}
-        <section className="detail-section">
+        <section className="detail-section detail-section--story">
           <div className="detail-section__header">
             <div className="detail-section__title">Description</div>
           </div>
@@ -819,7 +834,7 @@ export default function IssueDetailPanel({
         {/* Watchers & subtasks */}
         <section className="detail-section">
           <div className="detail-section__header">
-            <div className="detail-section__title">People & hierarchy</div>
+            <div className="detail-section__title">Watchers and subtasks</div>
           </div>
           <div className="fields-grid">
             <div>
@@ -940,7 +955,7 @@ export default function IssueDetailPanel({
                 </>
               ) : (
                 <>
-                  <strong>Upload a file</strong> · click to select
+                  <strong>Upload a file</strong>
                 </>
               )}
             </div>

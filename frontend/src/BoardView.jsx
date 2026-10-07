@@ -39,7 +39,7 @@ function BoardCard({ bug, active, onOpen, onMoveStatus }) {
         {bug.assignee?.username && <span className="board__assignee">{bug.assignee.username}</span>}
       </div>
       <label className="board__move" onClick={(event) => event.stopPropagation()}>
-        <span className="visually-hidden">Move {bug.issue_key || bug.title}</span>
+        <span className="board__move-label">Move</span>
         <select
           aria-label={`Move ${bug.issue_key || bug.title}`}
           value={bug.status}

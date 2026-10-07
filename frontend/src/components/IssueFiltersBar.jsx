@@ -12,22 +12,9 @@ export default function IssueFiltersBar({
   onFilterChange,
   onApply,
   onClear,
-  filtersDirty,
   activeFilterCount,
   selectedProjectCatalog,
 }) {
-  const activeChips = [
-    filterForm.status !== "all" && `Status: ${titleFromEnum(filterForm.status)}`,
-    filterForm.priority !== "all" && `Priority: ${titleFromEnum(filterForm.priority)}`,
-    filterForm.issueType !== "all" && `Type: ${titleFromEnum(filterForm.issueType)}`,
-    filterForm.assigneeId !== "all" &&
-      `Assignee: ${
-        selectedProjectCatalog?.users?.find(
-          (user) => String(user.id) === String(filterForm.assigneeId),
-        )?.username || "Selected"
-      }`,
-  ].filter(Boolean);
-
   return (
     <form className="filter-bar" onSubmit={onApply} role="search">
       <div className="filter-bar__search">
@@ -53,16 +40,6 @@ export default function IssueFiltersBar({
           </button>
         )}
       </div>
-
-      {activeChips.length > 0 && (
-        <div className="filter-bar__chips" aria-label="Active filters">
-          {activeChips.map((chip) => (
-            <span key={chip} className="filter-chip">
-              {chip}
-            </span>
-          ))}
-        </div>
-      )}
 
       <div className="filter-bar__select">
         <select
@@ -161,14 +138,11 @@ export default function IssueFiltersBar({
       </div>
 
       <div className="filter-bar__actions">
-        <button type="submit" className="btn btn--primary" disabled={!filtersDirty}>
-          Apply
-        </button>
         <button
           type="button"
           className="btn btn--ghost"
           onClick={onClear}
-          disabled={activeFilterCount === 0 && !filtersDirty}
+          disabled={activeFilterCount === 0}
         >
           Reset
         </button>
