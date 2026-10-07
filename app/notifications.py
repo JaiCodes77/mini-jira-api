@@ -1,4 +1,3 @@
-import os
 import re
 import smtplib
 from datetime import datetime, timezone
@@ -9,6 +8,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app import models
+from app.config import settings
 
 
 MENTION_PATTERN = re.compile(r"(?<!\w)@([A-Za-z0-9_.-]+)")
@@ -26,15 +26,15 @@ def extract_mentioned_users(db: Session, body: str) -> list[models.User]:
 
 
 def _send_email(to_email: str, subject: str, body: str) -> bool:
-    host = os.getenv("SMTP_HOST")
-    from_email = os.getenv("SMTP_FROM")
+    host = settings.smtp_host
+    from_email = settings.smtp_from
     if not host or not from_email:
         return False
 
-    port = int(os.getenv("SMTP_PORT", "587"))
-    username = os.getenv("SMTP_USER")
-    password = os.getenv("SMTP_PASSWORD")
-    use_tls = os.getenv("SMTP_USE_TLS", "true").lower() != "false"
+    port = settings.smtp_port
+    username = settings.smtp_user
+    password = settings.smtp_password
+    use_tls = settings.smtp_use_tls
 
     message = EmailMessage()
     message["From"] = from_email

@@ -30,7 +30,7 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
   const fetchComments = useCallback(async (nextOffset = 0) => {
     try {
       setLoading(true);
-      const response = await fetch(
+      const response = await fetchWithAuth(
         `${API_BASE_URL}/bugs/${bugId}/comments?limit=${PAGE_SIZE}&offset=${nextOffset}`,
       );
       if (!response.ok) throw new Error("Failed to load comments.");
@@ -43,7 +43,7 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
     } finally {
       setLoading(false);
     }
-  }, [bugId]);
+  }, [bugId, fetchWithAuth]);
 
   useEffect(() => {
     void fetchComments();

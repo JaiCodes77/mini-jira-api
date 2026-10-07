@@ -86,6 +86,15 @@ export default function IssueListSection({
 
   return (
     <>
+      <div className="issue-table">
+      <div className="issue-list__head" aria-hidden="true">
+        <span />
+        <span>Key</span>
+        <span>Issue</span>
+        <span>Status</span>
+        <span>Assignee</span>
+        <span />
+      </div>
       <ul className="issue-list">
         {bugs.map((bug, index) => {
           const isActive = activeBugId === bug.id;
@@ -109,23 +118,17 @@ export default function IssueListSection({
               >
                 <span className="issue-row__priority-rail" aria-hidden />
                 <span className="issue-row__id">
-                  {bug.project?.key ? `${bug.project.key}-${bug.id}` : `#${bug.id}`}
-                </span>
-                <span className="issue-row__type">
-                  {titleFromEnum(bug.issue_type)}
+                  {bug.issue_key || (bug.project?.key ? `${bug.project.key}-${bug.id}` : `#${bug.id}`)}
                 </span>
                 <div className="issue-row__main">
                   <div className="issue-row__title">{bug.title}</div>
                   <div className="issue-row__sub">
-                    <span className={`tag tag--status-${bug.status}`}>
-                      <span className="tag__dot" />
-                      {titleFromEnum(bug.status)}
-                    </span>
-                    <span className={`tag tag--priority-${bug.priority}`}>
+                    <span>{titleFromEnum(bug.issue_type)}</span>
+                    <span className={`issue-row__priority issue-row__priority--${bug.priority}`}>
                       {titleFromEnum(bug.priority)}
                     </span>
                     {bug.story_points != null && (
-                      <span className="tag tag--muted">{bug.story_points} pts</span>
+                      <span>{bug.story_points} pts</span>
                     )}
                     {bug.labels?.length > 0 && (
                       <span className="issue-row__labels">
@@ -146,19 +149,23 @@ export default function IssueListSection({
                       </span>
                     )}
                     {bug.due_at && (
-                      <span className="tag tag--muted">Due {formatDate(bug.due_at)}</span>
+                      <span>Due {formatDate(bug.due_at)}</span>
                     )}
                   </div>
                 </div>
-                <div className="issue-row__right">
-                  {bug.assignee?.username && (
-                    <span className="issue-row__assignee" title={bug.assignee.username}>
-                      <span className="avatar" aria-hidden>
-                        {userInitials(bug.assignee.username)}
-                      </span>
+                <span className={`issue-row__status tag tag--status-${bug.status}`}>
+                  {titleFromEnum(bug.status)}
+                </span>
+                <span className="issue-row__assignee" title={bug.assignee?.username || "Unassigned"}>
+                  {bug.assignee?.username ? (
+                    <span className="avatar" aria-hidden>
+                      {userInitials(bug.assignee.username)}
                     </span>
+                  ) : (
+                    <span className="issue-row__unassigned">—</span>
                   )}
-                  <div className="issue-row__actions" onClick={(e) => e.stopPropagation()}>
+                </span>
+                <div className="issue-row__actions" onClick={(e) => e.stopPropagation()}>
                     {selectedProjectId != null && activeFilters.sortBy === "backlog_rank" && (
                       <>
                         <button
@@ -194,12 +201,12 @@ export default function IssueListSection({
                       {deletingId === bug.id ? "…" : "Delete"}
                     </button>
                   </div>
-                </div>
               </div>
             </li>
           );
         })}
       </ul>
+      </div>
 
       {totalPages > 1 && (
         <nav className="pager" aria-label="Pagination">

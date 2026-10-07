@@ -66,8 +66,8 @@ async def test_create_bug_no_title(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_list_bugs_empty(client):
-    resp = await client.get("/bugs")
+async def test_list_bugs_empty(client, auth_headers):
+    resp = await client.get("/bugs", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["items"] == []
@@ -81,7 +81,7 @@ async def test_list_bugs_returns_items(client, auth_headers):
     await client.post("/bugs", json={"title": "Bug 1"}, headers=auth_headers)
     await client.post("/bugs", json={"title": "Bug 2"}, headers=auth_headers)
 
-    resp = await client.get("/bugs")
+    resp = await client.get("/bugs", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["items"]) == 2, f"Expected 2 items, got {len(data['items'])}"
@@ -93,11 +93,11 @@ async def test_list_bugs_pagination(client, auth_headers):
     for i in range(3):
         await client.post("/bugs", json={"title": f"Bug {i}"}, headers=auth_headers)
 
-    first_page = (await client.get("/bugs", params={"limit": 2, "offset": 0})).json()
+    first_page = (await client.get("/bugs", params={"limit": 2, "offset": 0}, headers=auth_headers)).json()
     assert len(first_page["items"]) == 2, "First page should have 2 items"
     assert first_page["total"] == 3
 
-    second_page = (await client.get("/bugs", params={"limit": 2, "offset": 2})).json()
+    second_page = (await client.get("/bugs", params={"limit": 2, "offset": 2}, headers=auth_headers)).json()
     assert len(second_page["items"]) == 1, "Second page should have 1 item"
     assert second_page["total"] == 3
 
@@ -113,7 +113,7 @@ async def test_list_bugs_filter_status(client, auth_headers):
         headers=auth_headers,
     )
 
-    resp = await client.get("/bugs", params={"status": "open"})
+    resp = await client.get("/bugs", params={"status": "open"}, headers=auth_headers)
     data = resp.json()
     assert all(
         b["status"] == "open" for b in data["items"]
@@ -134,7 +134,7 @@ async def test_list_bugs_filter_priority(client, auth_headers):
         headers=auth_headers,
     )
 
-    resp = await client.get("/bugs", params={"priority": "high"})
+    resp = await client.get("/bugs", params={"priority": "high"}, headers=auth_headers)
     data = resp.json()
     assert all(
         b["priority"] == "high" for b in data["items"]
@@ -147,7 +147,7 @@ async def test_list_bugs_search(client, auth_headers):
     await client.post("/bugs", json={"title": "Login page crash"}, headers=auth_headers)
     await client.post("/bugs", json={"title": "Signup issue"}, headers=auth_headers)
 
-    resp = await client.get("/bugs", params={"q": "Login"})
+    resp = await client.get("/bugs", params={"q": "Login"}, headers=auth_headers)
     data = resp.json()
     assert data["total"] >= 1, "Search should find at least the matching bug"
     assert any(
@@ -161,19 +161,23 @@ async def test_list_bugs_sort(client, auth_headers):
     await client.post("/bugs", json={"title": "Apple"}, headers=auth_headers)
     await client.post("/bugs", json={"title": "Cherry"}, headers=auth_headers)
 
-    resp = await client.get("/bugs", params={"sort_by": "title", "order": "asc"})
+    resp = await client.get("/bugs", params={"sort_by": "title", "order": "asc"}, headers=auth_headers)
     data = resp.json()
     titles = [b["title"] for b in data["items"]]
     assert titles == sorted(titles), f"Expected ascending order, got {titles}"
 
 
 @pytest.mark.asyncio
-async def test_list_bugs_no_auth_required(client, auth_headers):
+async def test_list_bugs_requires_auth(client, auth_headers):
     await client.post("/bugs", json={"title": "Visible bug"}, headers=auth_headers)
 
-    resp = await client.get("/bugs")
-    assert resp.status_code == 200, "GET /bugs should not require auth"
+    anonymous = await client.get("/bugs")
+    assert anonymous.status_code == 401
+
+    resp = await client.get("/bugs", headers=auth_headers)
+    assert resp.status_code == 200
     assert resp.json()["total"] >= 1
+    assert resp.json()["items"][0]["issue_key"].startswith("ISSUE-")
 
 
 # ── PATCH /bugs/{id} ───────────────────────────────────────────────
@@ -251,6 +255,6 @@ async def test_delete_bug_verify_gone(client, auth_headers, sample_bug):
     bug_id = sample_bug["id"]
     await client.delete(f"/bugs/{bug_id}", headers=auth_headers)
 
-    resp = await client.get("/bugs")
+    resp = await client.get("/bugs", headers=auth_headers)
     ids = [b["id"] for b in resp.json()["items"]]
     assert bug_id not in ids, f"Bug {bug_id} should no longer appear in list after deletion"

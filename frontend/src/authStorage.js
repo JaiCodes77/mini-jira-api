@@ -16,6 +16,9 @@ export function loadAuth() {
             : Number.isFinite(Number(data.user_id))
               ? Number(data.user_id)
               : undefined,
+        email: typeof data.email === "string" ? data.email : undefined,
+        in_app_notifications: data.in_app_notifications,
+        email_notifications: data.email_notifications,
       };
     }
   } catch {
@@ -24,8 +27,15 @@ export function loadAuth() {
   return null;
 }
 
-export function saveAuth({ token, username, user_id }) {
-  localStorage.setItem(KEY, JSON.stringify({ token, username, user_id }));
+export function saveAuth(payload) {
+  const current = loadAuth() || {};
+  localStorage.setItem(
+    KEY,
+    JSON.stringify({
+      ...current,
+      ...payload,
+    }),
+  );
 }
 
 export function clearAuth() {

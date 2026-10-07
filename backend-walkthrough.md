@@ -1,5 +1,7 @@
 # Mini Jira API — Backend Walkthrough
 
+> Historical notes. The current setup, API, and architecture live in `README.md`. This file describes an earlier bugs-only version of the backend and is not the source of truth.
+
 ## 1. Project overview and tech stack
 
 This project is a **small bug-tracker API**: you create, list, update, and delete **bugs** (like lightweight Jira issues). The README positions it as "FastAPI + SQLAlchemy + SQLite" with an optional React frontend.

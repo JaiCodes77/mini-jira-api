@@ -72,15 +72,16 @@ export default function IssueDetailPanel({
   const [linkForm, setLinkForm] = useState({ target_bug_id: "", link_type: "relates" });
   const [uploading, setUploading] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   const loadActivity = useCallback(async (currentBugId) => {
-    const response = await fetch(
+    const response = await fetchWithAuth(
       `${API_BASE_URL}/bugs/${currentBugId}/activity?limit=50&offset=0`,
     );
     if (!response.ok) throw new Error("Failed to load activity.");
     const data = await response.json();
     setActivity(data.items);
-  }, []);
+  }, [fetchWithAuth]);
 
   const loadCatalog = useCallback(async (projectId) => {
     if (!projectId) {
@@ -89,8 +90,8 @@ export default function IssueDetailPanel({
       return;
     }
     const [catalogResponse, bugsResponse] = await Promise.all([
-      fetch(`${API_BASE_URL}/projects/${projectId}/catalog`),
-      fetch(
+      fetchWithAuth(`${API_BASE_URL}/projects/${projectId}/catalog`),
+      fetchWithAuth(
         `${API_BASE_URL}/bugs?project_id=${projectId}&limit=100&offset=0&sort_by=backlog_rank&order=asc`,
       ),
     ]);
@@ -99,23 +100,27 @@ export default function IssueDetailPanel({
       const bugData = await bugsResponse.json();
       setProjectIssues(bugData.items);
     }
-  }, []);
+  }, [fetchWithAuth]);
 
   const loadBug = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/bugs/${bugId}`);
+      setLoadError(null);
+      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}`);
       if (!response.ok) throw new Error("Failed to load issue details.");
       const data = await response.json();
       setBug(data);
       setDraft(draftFromBug(data));
       await Promise.all([loadCatalog(data.project_id), loadActivity(data.id)]);
     } catch (err) {
+      setBug(null);
+      setDraft(null);
+      setLoadError(err.message || "Could not load issue details.");
       toast(err.message || "Could not load issue details.", "error");
     } finally {
       setLoading(false);
     }
-  }, [bugId, loadActivity, loadCatalog]);
+  }, [bugId, fetchWithAuth, loadActivity, loadCatalog]);
 
   useEffect(() => {
     void loadBug();
@@ -318,6 +323,43 @@ export default function IssueDetailPanel({
     }
   };
 
+  const handleDownloadAttachment = async (attachment) => {
+    const response = await fetchWithAuth(`${API_BASE_URL}${attachment.download_url}`);
+    if (!response.ok) {
+      toast("Could not download attachment.", "error");
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = attachment.original_name;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (loadError && !bug) {
+    return (
+      <aside className="detail-panel">
+        <div className="detail-panel__header">
+          <div className="detail-panel__title">
+            <span className="detail-panel__eyebrow">Issue</span>
+            <span className="detail-panel__name">Could not open this issue</span>
+          </div>
+          <button type="button" className="btn btn--ghost" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div className="detail-panel__body">
+          <p>{loadError}</p>
+          <button type="button" className="btn btn--primary" onClick={() => void loadBug()}>
+            Retry
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
   if (loading || !bug || !draft) {
     return (
       <aside className="detail-panel" aria-busy="true">
@@ -351,16 +393,15 @@ export default function IssueDetailPanel({
       <div className="detail-panel__header">
         <div className="detail-panel__title">
           <span className="detail-panel__eyebrow">
-            {projectKey}-{bug.id} · {titleFromEnum(bug.issue_type)}
+            {bug.issue_key || `${projectKey}-${bug.id}`}
           </span>
+          <span className="detail-panel__kind">{titleFromEnum(bug.issue_type)}</span>
           <span className="detail-panel__name">{bug.title}</span>
         </div>
         <div className="detail-panel__actions">
           <button type="button" className="btn" onClick={() => void toggleWatch()}>
             {isWatching ? "Unwatch" : "Watch"}
-            {bug.watch_count > 0 && (
-              <span style={{ color: "var(--fg-subtle)" }}> · {bug.watch_count}</span>
-            )}
+            {bug.watch_count > 0 && <span className="btn__count">{bug.watch_count}</span>}
           </button>
           <button
             type="button"
@@ -708,53 +749,69 @@ export default function IssueDetailPanel({
                   <span className="kv__val--muted">None</span>
                 )}
               </div>
-              <div className="kv__key">Epic</div>
-              <div className="kv__val">
-                {bug.epic?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Sprint</div>
-              <div className="kv__val">
-                {bug.sprint?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Component</div>
-              <div className="kv__val">
-                {bug.component?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Fix version</div>
-              <div className="kv__val">
-                {bug.fix_version?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Affects version</div>
-              <div className="kv__val">
-                {bug.affects_version?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Story points</div>
-              <div className="kv__val">
-                {bug.story_points != null ? bug.story_points : <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Due</div>
-              <div className="kv__val">
-                {bug.due_at ? formatDate(bug.due_at) : <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Reminder</div>
-              <div className="kv__val">
-                {bug.reminder_at ? formatDate(bug.reminder_at) : <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Labels</div>
-              <div className="kv__val">
-                {bug.labels && bug.labels.length > 0 ? (
-                  <div className="label-picker">
-                    {bug.labels.map((label) => (
-                      <span key={label.id} className="label-chip">
-                        <span className="label-chip__dot" style={{ background: label.color }} />
-                        {label.name}
-                      </span>
-                    ))}
+              {bug.epic?.name && (
+                <>
+                  <div className="kv__key">Epic</div>
+                  <div className="kv__val">{bug.epic.name}</div>
+                </>
+              )}
+              {bug.sprint?.name && (
+                <>
+                  <div className="kv__key">Sprint</div>
+                  <div className="kv__val">{bug.sprint.name}</div>
+                </>
+              )}
+              {bug.component?.name && (
+                <>
+                  <div className="kv__key">Component</div>
+                  <div className="kv__val">{bug.component.name}</div>
+                </>
+              )}
+              {bug.fix_version?.name && (
+                <>
+                  <div className="kv__key">Fix version</div>
+                  <div className="kv__val">{bug.fix_version.name}</div>
+                </>
+              )}
+              {bug.affects_version?.name && (
+                <>
+                  <div className="kv__key">Affects version</div>
+                  <div className="kv__val">{bug.affects_version.name}</div>
+                </>
+              )}
+              {bug.story_points != null && (
+                <>
+                  <div className="kv__key">Story points</div>
+                  <div className="kv__val">{bug.story_points}</div>
+                </>
+              )}
+              {bug.due_at && (
+                <>
+                  <div className="kv__key">Due</div>
+                  <div className="kv__val">{formatDate(bug.due_at)}</div>
+                </>
+              )}
+              {bug.reminder_at && (
+                <>
+                  <div className="kv__key">Reminder</div>
+                  <div className="kv__val">{formatDate(bug.reminder_at)}</div>
+                </>
+              )}
+              {bug.labels?.length > 0 && (
+                <>
+                  <div className="kv__key">Labels</div>
+                  <div className="kv__val">
+                    <div className="label-picker">
+                      {bug.labels.map((label) => (
+                        <span key={label.id} className="label-chip">
+                          <span className="label-chip__dot" style={{ background: label.color }} />
+                          {label.name}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                ) : (
-                  <span className="kv__val--muted">None</span>
-                )}
-              </div>
+                </>
+              )}
               <div className="kv__key">Created</div>
               <div className="kv__val kv__val--muted">{formatDate(bug.created_at)}</div>
               <div className="kv__key">Updated</div>
@@ -764,7 +821,7 @@ export default function IssueDetailPanel({
         </section>
 
         {/* Description */}
-        <section className="detail-section">
+        <section className="detail-section detail-section--story">
           <div className="detail-section__header">
             <div className="detail-section__title">Description</div>
           </div>
@@ -777,7 +834,7 @@ export default function IssueDetailPanel({
         {/* Watchers & subtasks */}
         <section className="detail-section">
           <div className="detail-section__header">
-            <div className="detail-section__title">People & hierarchy</div>
+            <div className="detail-section__title">Watchers and subtasks</div>
           </div>
           <div className="fields-grid">
             <div>
@@ -898,7 +955,7 @@ export default function IssueDetailPanel({
                 </>
               ) : (
                 <>
-                  <strong>Upload a file</strong> · drag & drop or click to select
+                  <strong>Upload a file</strong>
                 </>
               )}
             </div>
@@ -917,14 +974,13 @@ export default function IssueDetailPanel({
                     </svg>
                   </span>
                   <div className="attach-item__info">
-                    <a
+                    <button
+                      type="button"
                       className="attach-item__name"
-                      href={`${API_BASE_URL}${attachment.download_url}`}
-                      target="_blank"
-                      rel="noreferrer"
+                      onClick={() => void handleDownloadAttachment(attachment)}
                     >
                       {attachment.original_name}
-                    </a>
+                    </button>
                     <span className="attach-item__size">
                       {Math.max(1, Math.round(attachment.size_bytes / 1024))} KB
                       {attachment.uploaded_by && ` · ${attachment.uploaded_by.username}`}
