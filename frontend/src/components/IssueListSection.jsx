@@ -1,13 +1,159 @@
-import { formatDate, titleFromEnum, userInitials } from "../issueConstants";
+import { AnimatePresence, motion } from "framer-motion";
+import { formatShortDate, issueKey } from "../issueConstants";
+import {
+  AlertIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  InboxIcon,
+  PlusIcon,
+  SearchIcon,
+  TrashIcon,
+} from "./Icons";
+import { Avatar, PriorityIcon, StatusTrack, TypeIcon } from "./IssueGlyphs";
 
-function Skeleton() {
+const SKELETON_WIDTHS = [62, 48, 71, 54, 66, 43];
+
+function SkeletonRows() {
   return (
-    <div className="skeleton">
-      <div className="skeleton-bar" style={{ width: "44px" }} />
-      <div className="skeleton-bar" style={{ width: "48px" }} />
-      <div className="skeleton-bar" />
-      <div className="skeleton-bar" style={{ width: "80px" }} />
-    </div>
+    <ul className="issue-list" aria-busy="true" aria-label="Loading issues">
+      {SKELETON_WIDTHS.map((width, index) => (
+        <li key={index} className="issue-row issue-row--skeleton">
+          <span className="shimmer" style={{ width: 14 }} />
+          <span className="shimmer" style={{ width: 52 }} />
+          <span className="shimmer" style={{ width: `${width}%` }} />
+          <span className="shimmer issue-row__skeleton-track" />
+          <span className="shimmer shimmer--round" />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function EmptyState({ icon, title, children, actions }) {
+  return (
+    <motion.div
+      className="empty"
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: [0.2, 0, 0, 1] }}
+    >
+      <span className="empty__icon">{icon}</span>
+      <h2 className="empty__title">{title}</h2>
+      <p className="empty__text">{children}</p>
+      {actions && <div className="empty__actions">{actions}</div>}
+    </motion.div>
+  );
+}
+
+function IssueRow({
+  bug,
+  index,
+  count,
+  active,
+  canReorder,
+  deleting,
+  reordering,
+  onOpen,
+  onDelete,
+  onMove,
+}) {
+  const labels = bug.labels ?? [];
+  return (
+    <motion.li
+      layout="position"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, transition: { duration: 0.12 } }}
+      transition={{ type: "spring", stiffness: 500, damping: 42 }}
+    >
+      <div
+        className={`issue-row ${active ? "is-active" : ""}`}
+        role="button"
+        tabIndex={0}
+        aria-current={active ? "true" : undefined}
+        onClick={() => onOpen(bug.id)}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onOpen(bug.id);
+          }
+        }}
+      >
+        <PriorityIcon priority={bug.priority} />
+        <span className="issue-row__key">{issueKey(bug)}</span>
+        <span className="issue-row__main">
+          <TypeIcon type={bug.issue_type} />
+          <span className="issue-row__title">{bug.title}</span>
+          {labels.slice(0, 2).map((label) => (
+            <span key={label.id} className="label-tag" style={{ "--label-color": label.color }}>
+              {label.name}
+            </span>
+          ))}
+          {labels.length > 2 && <span className="label-tag label-tag--more">+{labels.length - 2}</span>}
+        </span>
+        <span className="issue-row__meta">
+          {bug.story_points != null && (
+            <span className="meta-pill" title="Story points">
+              {bug.story_points} pt
+            </span>
+          )}
+          {bug.due_at && (
+            <span
+              className={`meta-pill ${
+                bug.status !== "closed" && new Date(bug.due_at) < new Date() ? "meta-pill--late" : ""
+              }`}
+              title="Due date"
+            >
+              {formatShortDate(bug.due_at)}
+            </span>
+          )}
+        </span>
+        <StatusTrack status={bug.status} />
+        <span className="issue-row__assignee">
+          {bug.assignee?.username ? (
+            <Avatar name={bug.assignee.username} label={`Assigned to ${bug.assignee.username}`} />
+          ) : (
+            <span className="avatar avatar--empty" title="Unassigned" aria-label="Unassigned" role="img" />
+          )}
+        </span>
+        <span className="issue-row__actions" onClick={(event) => event.stopPropagation()}>
+          {canReorder && (
+            <>
+              <button
+                type="button"
+                className="icon-button icon-button--xs"
+                aria-label={`Move ${issueKey(bug)} up`}
+                onClick={() => onMove(index, -1)}
+                disabled={index === 0 || reordering}
+              >
+                <ChevronUpIcon size={14} />
+              </button>
+              <button
+                type="button"
+                className="icon-button icon-button--xs"
+                aria-label={`Move ${issueKey(bug)} down`}
+                onClick={() => onMove(index, 1)}
+                disabled={index === count - 1 || reordering}
+              >
+                <ChevronDownIcon size={14} />
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="icon-button icon-button--xs icon-button--danger"
+            aria-label={`Delete ${issueKey(bug)}`}
+            onClick={() => onDelete(bug)}
+            disabled={deleting}
+          >
+            <TrashIcon size={14} />
+          </button>
+        </span>
+      </div>
+    </motion.li>
   );
 }
 
@@ -25,224 +171,123 @@ export default function IssueListSection({
   selectedProjectId,
   deletingId,
   reorderingId,
-  onRefresh,
   onRetry,
   onNavigateIssue,
   onDeleteBug,
   onMoveBug,
   onPageChange,
+  onCreate,
+  onClearFilters,
   activeBugId,
 }) {
-  const showSkeleton = loading && !listLoadComplete;
-
   if (fetchError) {
     return (
-      <div className="alert" role="alert">
-        <span>{fetchError}</span>
-        <button type="button" className="btn btn--danger" onClick={onRetry}>
-          Retry
-        </button>
-      </div>
+      <EmptyState
+        icon={<AlertIcon size={20} />}
+        title="Issues did not load"
+        actions={
+          <button type="button" className="btn" onClick={onRetry}>
+            Try again
+          </button>
+        }
+      >
+        {fetchError} Check that the API is running on port 8000.
+      </EmptyState>
     );
   }
 
-  if (showSkeleton) {
-    return (
-      <div className="issue-list" aria-busy="true">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <Skeleton key={i} />
-        ))}
-      </div>
-    );
-  }
+  if (loading && !listLoadComplete) return <SkeletonRows />;
 
   if (!bugs.length) {
-    return (
-      <div className="empty">
-        <div className="empty__icon" aria-hidden>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M8 2v4" />
-            <path d="M16 2v4" />
-            <path d="M3 10h18" />
-          </svg>
-        </div>
-        <div className="empty__title">
-          {activeFilterCount > 0 ? "No matching issues" : "No issues yet"}
-        </div>
-        <div className="empty__text">
-          {activeFilterCount > 0
-            ? "Try loosening your filters or clearing the search."
-            : "Create a new issue to get started, or pick another project from the sidebar."}
-        </div>
-        {activeFilterCount === 0 && (
-          <button type="button" className="btn" onClick={onRefresh}>
-            Refresh
+    return activeFilterCount > 0 ? (
+      <EmptyState
+        icon={<SearchIcon size={20} />}
+        title="Nothing matches these filters"
+        actions={
+          <button type="button" className="btn" onClick={onClearFilters}>
+            Clear filters
           </button>
-        )}
-      </div>
+        }
+      >
+        Try a broader search or reset the filters to see every issue.
+      </EmptyState>
+    ) : (
+      <EmptyState
+        icon={<InboxIcon size={20} />}
+        title="No issues yet"
+        actions={
+          <button type="button" className="btn btn--primary" onClick={onCreate}>
+            <PlusIcon size={15} />
+            Create an issue
+          </button>
+        }
+      >
+        Write down the first bug, story, or task. It starts in Open and moves across as work happens.
+      </EmptyState>
     );
   }
+
+  const canReorder = selectedProjectId != null && activeFilters.sortBy === "backlog_rank";
+  const firstItem = currentPage * PAGE_SIZE + 1;
+  const lastItem = Math.min((currentPage + 1) * PAGE_SIZE, totalBugs);
 
   return (
     <>
-      <div className="issue-table">
-      <div className="issue-list__head" aria-hidden="true">
-        <span />
-        <span>Key</span>
-        <span>Issue</span>
-        <span>Status</span>
-        <span>Assignee</span>
-        <span />
-      </div>
-      <ul className="issue-list">
-        {bugs.map((bug, index) => {
-          const isActive = activeBugId === bug.id;
-          return (
-            <li key={bug.id}>
-              <div
-                className={`issue-row issue-row--${bug.priority} ${
-                  isActive ? "issue-row--active" : ""
-                }`}
-                role="button"
-                tabIndex={0}
-                aria-current={isActive ? "true" : undefined}
-                onClick={() => onNavigateIssue(bug.id)}
-                onKeyDown={(event) => {
-                  if (event.target !== event.currentTarget) return;
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onNavigateIssue(bug.id);
-                  }
-                }}
-              >
-                <span className="issue-row__priority-rail" aria-hidden />
-                <span className="issue-row__id">
-                  {bug.issue_key || (bug.project?.key ? `${bug.project.key}-${bug.id}` : `#${bug.id}`)}
-                </span>
-                <div className="issue-row__main">
-                  <div className="issue-row__title">{bug.title}</div>
-                  <div className="issue-row__sub">
-                    <span>{titleFromEnum(bug.issue_type)}</span>
-                    <span className={`issue-row__priority issue-row__priority--${bug.priority}`}>
-                      {titleFromEnum(bug.priority)}
-                    </span>
-                    {bug.story_points != null && (
-                      <span>{bug.story_points} pts</span>
-                    )}
-                    {bug.labels?.length > 0 && (
-                      <span className="issue-row__labels">
-                        {bug.labels.slice(0, 3).map((label) => (
-                          <span key={label.id} className="issue-row__label">
-                            <span
-                              className="issue-row__label-dot"
-                              style={{ background: label.color }}
-                            />
-                            {label.name}
-                          </span>
-                        ))}
-                        {bug.labels.length > 3 && (
-                          <span className="issue-row__label">
-                            +{bug.labels.length - 3}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                    {bug.due_at && (
-                      <span>Due {formatDate(bug.due_at)}</span>
-                    )}
-                  </div>
-                </div>
-                <span className={`issue-row__status tag tag--status-${bug.status}`}>
-                  {titleFromEnum(bug.status)}
-                </span>
-                <span className="issue-row__assignee" title={bug.assignee?.username || "Unassigned"}>
-                  {bug.assignee?.username ? (
-                    <span className="avatar" aria-hidden>
-                      {userInitials(bug.assignee.username)}
-                    </span>
-                  ) : (
-                    <span className="issue-row__unassigned">—</span>
-                  )}
-                </span>
-                <div className="issue-row__actions" onClick={(e) => e.stopPropagation()}>
-                    {selectedProjectId != null && activeFilters.sortBy === "backlog_rank" && (
-                      <>
-                        <button
-                          type="button"
-                          className="btn btn--ghost btn--icon"
-                          aria-label="Move up"
-                          onClick={() => onMoveBug(index, -1)}
-                          disabled={index === 0 || reorderingId === bug.id}
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="m18 15-6-6-6 6" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn--ghost btn--icon"
-                          aria-label="Move down"
-                          onClick={() => onMoveBug(index, 1)}
-                          disabled={index === bugs.length - 1 || reorderingId === bug.id}
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="m6 9 6 6 6-6" />
-                          </svg>
-                        </button>
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      className="btn btn--danger"
-                      onClick={() => onDeleteBug(bug)}
-                      disabled={deletingId === bug.id}
-                    >
-                      {deletingId === bug.id ? "…" : "Delete"}
-                    </button>
-                  </div>
-              </div>
-            </li>
-          );
-        })}
+      <ul className={`issue-list ${loading ? "is-refreshing" : ""}`}>
+        <AnimatePresence initial={false}>
+          {bugs.map((bug, index) => (
+            <IssueRow
+              key={bug.id}
+              bug={bug}
+              index={index}
+              count={bugs.length}
+              active={activeBugId === bug.id}
+              canReorder={canReorder}
+              deleting={deletingId === bug.id}
+              reordering={reorderingId === bug.id}
+              onOpen={onNavigateIssue}
+              onDelete={onDeleteBug}
+              onMove={onMoveBug}
+            />
+          ))}
+        </AnimatePresence>
       </ul>
-      </div>
 
       {totalPages > 1 && (
         <nav className="pager" aria-label="Pagination">
-          <button
-            type="button"
-            className="btn btn--ghost"
-            disabled={currentPage === 0 || loading}
-            onClick={() => onPageChange(currentPage - 1)}
-          >
-            Previous
-          </button>
-          <div className="pager__nav">
+          <span className="pager__info">
+            {firstItem}–{lastItem} of {totalBugs}
+          </span>
+          <div className="pager__controls">
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Previous page"
+              disabled={currentPage === 0 || loading}
+              onClick={() => onPageChange(currentPage - 1)}
+            >
+              <ChevronLeftIcon size={16} />
+            </button>
             {Array.from({ length: totalPages }, (_, index) => (
               <button
                 key={index}
                 type="button"
-                className={`pager__num ${index === currentPage ? "pager__num--active" : ""}`}
+                className={`pager__page ${index === currentPage ? "is-current" : ""}`}
+                aria-current={index === currentPage ? "page" : undefined}
                 disabled={loading}
                 onClick={() => onPageChange(index)}
               >
                 {index + 1}
               </button>
             ))}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <span className="pager__info">
-              {currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, totalBugs)}{" "}
-              of {totalBugs}
-            </span>
             <button
               type="button"
-              className="btn btn--ghost"
+              className="icon-button"
+              aria-label="Next page"
               disabled={currentPage >= totalPages - 1 || loading}
               onClick={() => onPageChange(currentPage + 1)}
             >
-              Next
+              <ChevronRightIcon size={16} />
             </button>
           </div>
         </nav>

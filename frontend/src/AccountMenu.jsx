@@ -1,14 +1,39 @@
+import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { API_BASE_URL } from "./apiConfig";
-import { userInitials } from "./issueConstants";
+import { ChevronUpIcon, LogOutIcon, MonitorIcon, MoonIcon, SunIcon } from "./components/Icons";
+import { Avatar } from "./components/IssueGlyphs";
+import Popover from "./components/Popover";
+import { useTheme } from "./theme";
 import { toast } from "./Toasts";
 
+const THEMES = [
+  { key: "system", label: "System", Icon: MonitorIcon },
+  { key: "light", label: "Light", Icon: SunIcon },
+  { key: "dark", label: "Dark", Icon: MoonIcon },
+];
+
+function Switch({ checked, onChange, label, hint }) {
+  return (
+    <label className="switch-row">
+      <span className="switch-row__text">
+        <span>{label}</span>
+        {hint && <span className="switch-row__hint">{hint}</span>}
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        className="switch"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
+  );
+}
+
 export default function AccountMenu({ auth, fetchWithAuth, onLogout, onAuthUpdated }) {
-  const [open, setOpen] = useState(false);
-  const [prefs, setPrefs] = useState({
-    in_app_notifications: true,
-    email_notifications: true,
-  });
+  const { preference, setPreference } = useTheme();
+  const [prefs, setPrefs] = useState({ in_app_notifications: true, email_notifications: true });
 
   useEffect(() => {
     setPrefs({
@@ -18,16 +43,16 @@ export default function AccountMenu({ auth, fetchWithAuth, onLogout, onAuthUpdat
   }, [auth?.email_notifications, auth?.in_app_notifications]);
 
   const updatePref = async (field, value) => {
-    const next = { ...prefs, [field]: value };
-    setPrefs(next);
+    const previous = prefs;
+    setPrefs({ ...prefs, [field]: value });
     const response = await fetchWithAuth(`${API_BASE_URL}/auth/me/preferences`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ [field]: value }),
     });
     if (!response.ok) {
-      setPrefs(prefs);
-      toast("Could not update preferences.", "error");
+      setPrefs(previous);
+      toast("Could not save that preference.", "error");
       return;
     }
     const me = await response.json();
@@ -40,44 +65,85 @@ export default function AccountMenu({ auth, fetchWithAuth, onLogout, onAuthUpdat
     });
   };
 
+  const username = auth?.username || "You";
+
   return (
-    <div className="account">
-      <button
-        type="button"
-        className="account__trigger"
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className="topbar__avatar" aria-hidden>
-          {userInitials(auth?.username)}
-        </span>
-        <span>{auth?.username}</span>
-      </button>
-      {open && (
-        <div className="account__panel" role="dialog" aria-label="Account">
-          <p className="account__email">{auth?.email || "Signed in"}</p>
-          <label className="account__toggle">
-            <input
-              type="checkbox"
-              checked={prefs.in_app_notifications}
-              onChange={(event) => void updatePref("in_app_notifications", event.target.checked)}
-            />
-            In-app notifications
-          </label>
-          <label className="account__toggle">
-            <input
-              type="checkbox"
-              checked={prefs.email_notifications}
-              onChange={(event) => void updatePref("email_notifications", event.target.checked)}
-            />
-            Email notifications
-          </label>
-          <button type="button" className="btn" onClick={onLogout}>
-            Sign out
-          </button>
-        </div>
+    <Popover
+      label="Account"
+      side="top"
+      align="start"
+      panelClassName="account"
+      renderTrigger={({ open, toggle }) => (
+        <button
+          type="button"
+          className="account-trigger"
+          data-popover-trigger
+          aria-expanded={open}
+          aria-haspopup="dialog"
+          onClick={toggle}
+        >
+          <Avatar name={username} />
+          <span className="account-trigger__name">{username}</span>
+          <ChevronUpIcon size={14} className="account-trigger__chevron" />
+        </button>
       )}
-    </div>
+    >
+      <div className="account__who">
+        <Avatar name={username} size="lg" />
+        <div>
+          <p className="account__name">{username}</p>
+          <p className="account__email">{auth?.email || "Signed in"}</p>
+        </div>
+      </div>
+
+      <div className="account__section">
+        <p className="account__label">Appearance</p>
+        <div className="segmented segmented--full" role="radiogroup" aria-label="Theme">
+          {THEMES.map(({ key, label, Icon }) => (
+            <button
+              key={key}
+              type="button"
+              role="radio"
+              aria-checked={preference === key}
+              className={`segmented__item ${preference === key ? "is-active" : ""}`}
+              onClick={() => setPreference(key)}
+            >
+              {preference === key && (
+                <motion.span
+                  layoutId="theme-pill"
+                  className="segmented__pill"
+                  transition={{ type: "spring", stiffness: 500, damping: 38 }}
+                />
+              )}
+              <span className="segmented__label">
+                <Icon size={14} />
+                {label}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="account__section">
+        <p className="account__label">Notifications</p>
+        <Switch
+          label="In the app"
+          hint="Mentions, assignments, and status changes"
+          checked={prefs.in_app_notifications}
+          onChange={(value) => void updatePref("in_app_notifications", value)}
+        />
+        <Switch
+          label="By email"
+          hint="Sent only when the API has SMTP configured"
+          checked={prefs.email_notifications}
+          onChange={(value) => void updatePref("email_notifications", value)}
+        />
+      </div>
+
+      <button type="button" className="account__signout" onClick={onLogout}>
+        <LogOutIcon size={15} />
+        Sign out
+      </button>
+    </Popover>
   );
 }

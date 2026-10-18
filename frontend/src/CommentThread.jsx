@@ -1,23 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { useCallback, useEffect, useState } from "react";
 import { API_BASE_URL } from "./apiConfig";
-import { toast } from "./Toasts";
+import { Avatar } from "./components/IssueGlyphs";
+import { PencilIcon, TrashIcon } from "./components/Icons";
+import { formatDate, formatRelative } from "./issueConstants";
 import MarkdownText from "./MarkdownText";
-import { userInitials } from "./issueConstants";
-
-const formatDate = (value) => {
-  const date = new Date(value);
-  const now = new Date();
-  const diff = Math.floor((now - date) / 1000);
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-  return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(date);
-};
+import { toast } from "./Toasts";
 
 const PAGE_SIZE = 20;
 
-export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableUsers = [] }) {
+const submitOnModEnter = (handler) => (event) => {
+  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    handler();
+  }
+};
+
+export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableUsers = [], onCountChange }) {
   const [comments, setComments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
@@ -27,31 +26,36 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
 
-  const fetchComments = useCallback(async (nextOffset = 0) => {
-    try {
-      setLoading(true);
-      const response = await fetchWithAuth(
-        `${API_BASE_URL}/bugs/${bugId}/comments?limit=${PAGE_SIZE}&offset=${nextOffset}`,
-      );
-      if (!response.ok) throw new Error("Failed to load comments.");
-      const data = await response.json();
-      setComments(data.items);
-      setTotal(data.total);
-      setOffset(nextOffset);
-    } catch (err) {
-      toast(err.message || "Could not load comments.", "error");
-    } finally {
-      setLoading(false);
-    }
-  }, [bugId, fetchWithAuth]);
+  const fetchComments = useCallback(
+    async (nextOffset = 0) => {
+      try {
+        const response = await fetchWithAuth(
+          `${API_BASE_URL}/bugs/${bugId}/comments?limit=${PAGE_SIZE}&offset=${nextOffset}`,
+        );
+        if (!response.ok) throw new Error("Could not load comments.");
+        const data = await response.json();
+        setComments(data.items);
+        setTotal(data.total);
+        setOffset(nextOffset);
+      } catch (err) {
+        toast(err.message, "error");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [bugId, fetchWithAuth],
+  );
 
   useEffect(() => {
     void fetchComments();
   }, [fetchComments]);
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    if (!body.trim()) return;
+  useEffect(() => {
+    onCountChange?.(total);
+  }, [onCountChange, total]);
+
+  const submit = async () => {
+    if (!body.trim() || submitting) return;
     try {
       setSubmitting(true);
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/comments`, {
@@ -61,19 +65,18 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
       });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error("Failed to add comment.");
+        throw new Error("Could not post the comment.");
       }
       setBody("");
       await fetchComments(0);
-      toast("Comment added.");
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDelete = async (commentId) => {
+  const remove = async (commentId) => {
     if (!window.confirm("Delete this comment?")) return;
     try {
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/comments/${commentId}`, {
@@ -81,21 +84,16 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
       });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error("Failed to delete comment.");
+        throw new Error("Could not delete the comment.");
       }
       await fetchComments(offset);
       toast("Comment deleted.");
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     }
   };
 
-  const handleEditStart = (comment) => {
-    setEditingId(comment.id);
-    setEditBody(comment.body);
-  };
-
-  const handleEditSave = async () => {
+  const saveEdit = async () => {
     if (!editBody.trim()) return;
     try {
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/comments/${editingId}`, {
@@ -105,110 +103,170 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
       });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error("Failed to update comment.");
+        throw new Error("Could not update the comment.");
       }
       setEditingId(null);
       setEditBody("");
       await fetchComments(offset);
-      toast("Comment updated.");
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     }
   };
 
-  const currentUserId = auth?.user_id;
-  const mentionHint = useMemo(
-    () => mentionableUsers.slice(0, 4).map((user) => `@${user.username}`).join(", "),
-    [mentionableUsers],
-  );
+  const mentionHint = mentionableUsers
+    .filter((user) => user.id !== auth?.user_id)
+    .slice(0, 3)
+    .map((user) => `@${user.username}`)
+    .join(" ");
 
   return (
     <div className="comments">
-      {loading ? (
-        <div className="detail-section__empty">Loading comments…</div>
-      ) : comments.length === 0 ? (
-        <div className="detail-section__empty">No comments yet. Start the conversation.</div>
-      ) : (
-        comments.map((comment) => {
-          const isAuthor = comment.author_id === currentUserId;
-          const isEditing = editingId === comment.id;
-          return (
-            <article key={comment.id} className="comment">
-              <div className="comment__header">
-                <span className="avatar" aria-hidden>{userInitials(comment.author.username)}</span>
-                <span className="comment__author">{comment.author.username}</span>
-                <span className="comment__date">{formatDate(comment.created_at)}</span>
-                {isAuthor && !isEditing && (
-                  <div className="comment__actions">
-                    <button
-                      type="button"
-                      className="btn btn--ghost"
-                      aria-label={`Edit comment by ${comment.author.username}`}
-                      onClick={() => handleEditStart(comment)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn--danger"
-                      aria-label={`Delete comment by ${comment.author.username}`}
-                      onClick={() => void handleDelete(comment.id)}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                )}
-              </div>
-              {isEditing ? (
-                <div className="comment-edit">
-                  <textarea
-                    className="textarea"
-                    rows={3}
-                    aria-label="Edit comment"
-                    value={editBody}
-                    onChange={(e) => setEditBody(e.target.value)}
-                  />
-                  <div className="comment-edit__actions">
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => {
-                        setEditingId(null);
-                        setEditBody("");
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn--primary"
-                      onClick={() => void handleEditSave()}
-                      disabled={!editBody.trim()}
-                    >
-                      Save
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <MarkdownText value={comment.body} />
-                  {comment.mentioned_users?.length > 0 && (
-                    <div className="comment__mentions">
-                      Mentioned: {comment.mentioned_users.map((user) => `@${user.username}`).join(", ")}
-                    </div>
-                  )}
-                </>
+      {auth?.token && (
+        <form
+          className="composer"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <Avatar name={auth.username} />
+          <div className="composer__box">
+            <label className="visually-hidden" htmlFor={`comment-${bugId}`}>
+              Write a comment
+            </label>
+            <textarea
+              id={`comment-${bugId}`}
+              className="composer__input"
+              rows={body ? 3 : 1}
+              placeholder="Leave a comment"
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+              onKeyDown={submitOnModEnter(() => void submit())}
+            />
+            <AnimatePresence initial={false}>
+              {body && (
+                <motion.div
+                  key="bar"
+                  className="composer__bar"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.16 }}
+                >
+                  <span className="composer__hint">
+                    {mentionHint ? `Mention ${mentionHint}` : "Markdown works"}
+                  </span>
+                  <button type="submit" className="btn btn--primary btn--sm" disabled={submitting || !body.trim()}>
+                    {submitting ? "Posting…" : "Comment"}
+                  </button>
+                </motion.div>
               )}
-            </article>
-          );
-        })
+            </AnimatePresence>
+          </div>
+        </form>
+      )}
+
+      {loading ? (
+        <div className="comment comment--skeleton">
+          <span className="shimmer shimmer--round" />
+          <span className="shimmer" style={{ width: "70%" }} />
+        </div>
+      ) : comments.length === 0 ? (
+        <p className="section-empty">No comments yet.</p>
+      ) : (
+        <ul className="comment-list">
+          <AnimatePresence initial={false}>
+            {comments.map((comment) => {
+              const isAuthor = comment.author_id === auth?.user_id;
+              const isEditing = editingId === comment.id;
+              return (
+                <motion.li
+                  key={comment.id}
+                  layout="position"
+                  className="comment"
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, transition: { duration: 0.12 } }}
+                >
+                  <Avatar name={comment.author.username} />
+                  <div className="comment__body">
+                    <div className="comment__head">
+                      <span className="comment__author">{comment.author.username}</span>
+                      <time className="comment__time" dateTime={comment.created_at} title={formatDate(comment.created_at)}>
+                        {formatRelative(comment.created_at)}
+                      </time>
+                      {isAuthor && !isEditing && (
+                        <span className="comment__actions">
+                          <button
+                            type="button"
+                            className="icon-button icon-button--xs"
+                            aria-label="Edit comment"
+                            onClick={() => {
+                              setEditingId(comment.id);
+                              setEditBody(comment.body);
+                            }}
+                          >
+                            <PencilIcon size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-button icon-button--xs icon-button--danger"
+                            aria-label="Delete comment"
+                            onClick={() => void remove(comment.id)}
+                          >
+                            <TrashIcon size={13} />
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                    {isEditing ? (
+                      <div className="comment__edit">
+                        <textarea
+                          className="textarea"
+                          rows={3}
+                          aria-label="Edit comment"
+                          value={editBody}
+                          onChange={(event) => setEditBody(event.target.value)}
+                          onKeyDown={submitOnModEnter(() => void saveEdit())}
+                          autoFocus
+                        />
+                        <div className="comment__edit-actions">
+                          <button
+                            type="button"
+                            className="btn btn--ghost btn--sm"
+                            onClick={() => {
+                              setEditingId(null);
+                              setEditBody("");
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn--primary btn--sm"
+                            onClick={() => void saveEdit()}
+                            disabled={!editBody.trim()}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <MarkdownText value={comment.body} />
+                    )}
+                  </div>
+                </motion.li>
+              );
+            })}
+          </AnimatePresence>
+        </ul>
       )}
 
       {!loading && total > PAGE_SIZE && (
         <div className="comment-pager">
           <button
             type="button"
-            className="btn"
+            className="btn btn--ghost btn--sm"
             disabled={offset === 0}
             onClick={() => void fetchComments(Math.max(0, offset - PAGE_SIZE))}
           >
@@ -219,38 +277,13 @@ export default function CommentThread({ bugId, auth, fetchWithAuth, mentionableU
           </span>
           <button
             type="button"
-            className="btn"
+            className="btn btn--ghost btn--sm"
             disabled={offset + PAGE_SIZE >= total}
             onClick={() => void fetchComments(offset + PAGE_SIZE)}
           >
             Older
           </button>
         </div>
-      )}
-
-      {auth?.token && (
-        <form className="comment-form" onSubmit={handleSubmit}>
-          <textarea
-            className="textarea"
-            rows={3}
-            aria-label="Write a comment"
-            placeholder="Write a comment. Use @username to mention teammates."
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-          />
-          <div className="comment-form__actions">
-            {mentionHint && (
-              <span className="comment-form__hint">Mentions: {mentionHint}</span>
-            )}
-            <button
-              type="submit"
-              className="btn btn--primary"
-              disabled={submitting || !body.trim()}
-            >
-              {submitting ? "Posting…" : "Post comment"}
-            </button>
-          </div>
-        </form>
       )}
     </div>
   );

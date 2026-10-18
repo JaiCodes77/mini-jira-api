@@ -1,21 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import AccountMenu from "./AccountMenu";
 import { API_BASE_URL } from "./apiConfig";
 import { useAuth } from "./AuthContext";
 import BoardView from "./BoardView";
 import CreateIssueModal from "./components/CreateIssueModal";
+import { BoardIcon, BrandMark, ListIcon, MenuIcon, PlanningIcon, PlusIcon, UsersIcon } from "./components/Icons";
 import IssueFiltersBar from "./components/IssueFiltersBar";
+import { FlowBar } from "./components/IssueGlyphs";
 import IssueListSection from "./components/IssueListSection";
 import IssueDetailPanel from "./IssueDetailPanel";
+import { issueKey, statusLabel } from "./issueConstants";
+import { INITIAL_FILTER_STATE } from "./issueFormState";
 import MembersPanel from "./MembersPanel";
 import NotificationCenter from "./NotificationCenter";
 import ProjectCatalogModal from "./ProjectCatalogManager";
-import ProjectSidebar from "./ProjectSidebar";
-import { INITIAL_FILTER_STATE } from "./issueFormState";
+import ProjectSidebar, { ProjectMonogram } from "./ProjectSidebar";
 import { toast } from "./Toasts";
+import useMediaQuery from "./useMediaQuery";
 
 const PAGE_SIZE = 20;
+const DOCK_WIDTH = 480;
+const SEARCH_DELAY = 250;
+const easeOut = [0.2, 0, 0, 1];
 
 const INITIAL_FORM_STATE = {
   title: "",
@@ -35,6 +43,11 @@ const INITIAL_FORM_STATE = {
   reminder_at: "",
   label_ids: [],
 };
+
+const VIEWS = [
+  { key: "list", label: "List", Icon: ListIcon },
+  { key: "board", label: "Board", Icon: BoardIcon },
+];
 
 const countActiveFilters = (filters) =>
   [
@@ -62,6 +75,10 @@ const buildBugsQueryString = (filters, limit, offset, projectId) => {
   return params.toString();
 };
 
+const isTypingTarget = (target) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+
 async function readError(response, fallback) {
   const body = await response.json().catch(() => null);
   if (Array.isArray(body?.detail)) {
@@ -71,12 +88,43 @@ async function readError(response, fallback) {
   return fallback;
 }
 
+function ViewToggle({ view, onChange }) {
+  return (
+    <div className="segmented" role="tablist" aria-label="Issue view">
+      {VIEWS.map(({ key, label, Icon }) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          aria-selected={view === key}
+          className={`segmented__item ${view === key ? "is-active" : ""}`}
+          onClick={() => onChange(key)}
+        >
+          {view === key && (
+            <motion.span
+              layoutId="view-pill"
+              className="segmented__pill"
+              transition={{ type: "spring", stiffness: 500, damping: 38 }}
+            />
+          )}
+          <span className="segmented__label">
+            <Icon size={15} />
+            {label}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { bugId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { auth, logout, updateAuth } = useAuth();
   const view = searchParams.get("view") === "board" ? "board" : "list";
+  const isCompact = useMediaQuery("(max-width: 899px)");
+  const isDocked = useMediaQuery("(min-width: 1100px)");
 
   const [bugs, setBugs] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -100,7 +148,10 @@ export default function Dashboard() {
   const [createOpen, setCreateOpen] = useState(false);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
   const [summary, setSummary] = useState(null);
+  const [detailSync, setDetailSync] = useState(0);
+  const searchTimer = useRef(null);
 
   const totalPages = Math.max(1, Math.ceil(totalBugs / PAGE_SIZE));
   const activeFilterCount = useMemo(() => countActiveFilters(activeFilters), [activeFilters]);
@@ -108,22 +159,14 @@ export default function Dashboard() {
     () => projects.find((project) => project.id === selectedProjectId) || null,
     [projects, selectedProjectId],
   );
-  const countLine =
-    activeFilterCount > 0
-      ? `${totalBugs} matching ${totalBugs === 1 ? "issue" : "issues"}`
-      : `${totalBugs} ${totalBugs === 1 ? "issue" : "issues"}, ${summary?.open ?? 0} open, ${summary?.in_progress ?? 0} in progress, ${summary?.high_priority ?? 0} high priority`;
-  const effectiveCreateProjectId = form.project_id
-    ? Number(form.project_id)
-    : selectedProjectId;
+  const effectiveCreateProjectId = form.project_id ? Number(form.project_id) : selectedProjectId;
   const createCatalog = useMemo(() => {
-    if (
-      selectedProjectCatalog &&
-      selectedProjectCatalog.project?.id === effectiveCreateProjectId
-    ) {
+    if (selectedProjectCatalog && selectedProjectCatalog.project?.id === effectiveCreateProjectId) {
       return selectedProjectCatalog;
     }
     return createFormCatalog;
   }, [createFormCatalog, effectiveCreateProjectId, selectedProjectCatalog]);
+
   const fetchWithAuth = useCallback(
     async (url, options = {}) => {
       const headers = {
@@ -134,7 +177,7 @@ export default function Dashboard() {
       if (response.status === 401) {
         logout();
         navigate("/login", { replace: true });
-        toast("Session expired. Please sign in again.", "error");
+        toast("Your session expired. Sign in again.", "error");
       }
       return response;
     },
@@ -144,27 +187,30 @@ export default function Dashboard() {
   const loadProjects = useCallback(async () => {
     try {
       const response = await fetchWithAuth(`${API_BASE_URL}/projects?limit=100&offset=0`);
-      if (!response.ok) throw new Error("Failed to fetch projects.");
+      if (!response.ok) throw new Error("Could not load projects.");
       const data = await response.json();
       setProjects(data.items);
       return data.items;
     } catch (err) {
-      toast(err.message || "Could not load projects.", "error");
+      toast(err.message, "error");
       return [];
     }
   }, [fetchWithAuth]);
 
-  const fetchProjectCatalog = useCallback(async (projectId, { silent = false } = {}) => {
-    if (!projectId) return null;
-    try {
-      const response = await fetchWithAuth(`${API_BASE_URL}/projects/${projectId}/catalog`);
-      if (!response.ok) throw new Error("Failed to load project planning data.");
-      return await response.json();
-    } catch (err) {
-      if (!silent) toast(err.message || "Could not load project planning data.", "error");
-      return null;
-    }
-  }, [fetchWithAuth]);
+  const fetchProjectCatalog = useCallback(
+    async (projectId, { silent = false } = {}) => {
+      if (!projectId) return null;
+      try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/projects/${projectId}/catalog`);
+        if (!response.ok) throw new Error("Could not load the project's planning data.");
+        return await response.json();
+      } catch (err) {
+        if (!silent) toast(err.message, "error");
+        return null;
+      }
+    },
+    [fetchWithAuth],
+  );
 
   const fetchBugs = useCallback(
     async ({
@@ -178,21 +224,15 @@ export default function Dashboard() {
         setFetchError(null);
         const pageSize = view === "board" ? 100 : PAGE_SIZE;
         const offset = view === "board" ? 0 : page * PAGE_SIZE;
-        const endpoint = `${API_BASE_URL}/bugs?${buildBugsQueryString(
-          filtersToUse,
-          pageSize,
-          offset,
-          projectId,
-        )}`;
-        const response = await fetchWithAuth(endpoint);
-        if (!response.ok) throw new Error("Failed to fetch issues.");
+        const response = await fetchWithAuth(
+          `${API_BASE_URL}/bugs?${buildBugsQueryString(filtersToUse, pageSize, offset, projectId)}`,
+        );
+        if (!response.ok) throw new Error("The issue list request failed.");
         const data = await response.json();
         setBugs(data.items);
         setTotalBugs(data.total);
       } catch (err) {
-        const message = err.message || "Something went wrong while fetching issues.";
-        setFetchError(message);
-        toast(message, "error");
+        setFetchError(err.message === "Failed to fetch" ? "The API did not respond." : err.message);
       } finally {
         if (showLoading) setLoading(false);
         setListLoadComplete(true);
@@ -205,8 +245,12 @@ export default function Dashboard() {
     async (projectId = selectedProjectId) => {
       const params = new URLSearchParams();
       if (projectId != null) params.set("project_id", String(projectId));
-      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/summary?${params}`);
-      if (response.ok) setSummary(await response.json());
+      try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/bugs/summary?${params}`);
+        if (response.ok) setSummary(await response.json());
+      } catch {
+        // the list request reports connectivity problems
+      }
     },
     [fetchWithAuth, selectedProjectId],
   );
@@ -232,9 +276,7 @@ export default function Dashboard() {
       setSelectedProjectCatalog(null);
       return;
     }
-    void fetchProjectCatalog(selectedProjectId, { silent: true }).then((data) => {
-      setSelectedProjectCatalog(data);
-    });
+    void fetchProjectCatalog(selectedProjectId, { silent: true }).then(setSelectedProjectCatalog);
   }, [fetchProjectCatalog, selectedProjectId]);
 
   useEffect(() => {
@@ -246,9 +288,7 @@ export default function Dashboard() {
       setCreateFormCatalog(selectedProjectCatalog);
       return;
     }
-    void fetchProjectCatalog(effectiveCreateProjectId, { silent: true }).then((data) => {
-      setCreateFormCatalog(data);
-    });
+    void fetchProjectCatalog(effectiveCreateProjectId, { silent: true }).then(setCreateFormCatalog);
   }, [effectiveCreateProjectId, fetchProjectCatalog, selectedProjectCatalog]);
 
   useEffect(() => {
@@ -258,14 +298,15 @@ export default function Dashboard() {
     }
   }, [projects, selectedProjectId]);
 
-  const refreshProjects = useCallback(async () => {
-    await loadProjects();
-  }, [loadProjects]);
+  useEffect(() => () => window.clearTimeout(searchTimer.current), []);
+
+  useEffect(() => {
+    if (!isCompact) setNavOpen(false);
+  }, [isCompact]);
 
   const refreshSelectedProjectCatalog = useCallback(async () => {
     if (!selectedProjectId) return;
-    const data = await fetchProjectCatalog(selectedProjectId, { silent: true });
-    setSelectedProjectCatalog(data);
+    setSelectedProjectCatalog(await fetchProjectCatalog(selectedProjectId, { silent: true }));
   }, [fetchProjectCatalog, selectedProjectId]);
 
   const handleLogout = useCallback(() => {
@@ -285,10 +326,21 @@ export default function Dashboard() {
     [view],
   );
 
+  const openIssue = useCallback(
+    (id) => navigate(`/dashboard/bugs/${id}${locationSearch(selectedProjectId)}`),
+    [locationSearch, navigate, selectedProjectId],
+  );
+
+  const closeDetail = useCallback(
+    () => navigate(`/dashboard${locationSearch(selectedProjectId)}`),
+    [locationSearch, navigate, selectedProjectId],
+  );
+
   const handleSelectProject = useCallback(
     (projectId) => {
       setSelectedProjectId(projectId);
       setCurrentPage(0);
+      setNavOpen(false);
       const search = locationSearch(projectId);
       if (bugId) navigate(`/dashboard${search}`);
       else setSearchParams(search ? search.slice(1) : "");
@@ -298,26 +350,31 @@ export default function Dashboard() {
 
   const handleFilterFieldChange = useCallback((field, value) => {
     setFilterForm((prev) => ({ ...prev, [field]: value }));
-    setActiveFilters((prev) => ({ ...prev, [field]: value }));
-    setCurrentPage(0);
+    window.clearTimeout(searchTimer.current);
+    const apply = () => {
+      setActiveFilters((prev) => ({ ...prev, [field]: value }));
+      setCurrentPage(0);
+    };
+    if (field === "search" && value !== "") searchTimer.current = window.setTimeout(apply, SEARCH_DELAY);
+    else apply();
   }, []);
 
   const handleFormFieldChange = useCallback((field, value) => {
-    setForm((prev) => {
-      if (field === "project_id") {
-        return {
-          ...prev,
-          project_id: value,
-          epic_id: "",
-          sprint_id: "",
-          component_id: "",
-          fix_version_id: "",
-          affects_version_id: "",
-          label_ids: [],
-        };
-      }
-      return { ...prev, [field]: value };
-    });
+    setForm((prev) =>
+      field === "project_id"
+        ? {
+            ...prev,
+            project_id: value,
+            epic_id: "",
+            sprint_id: "",
+            component_id: "",
+            fix_version_id: "",
+            affects_version_id: "",
+            assignee_id: "",
+            label_ids: [],
+          }
+        : { ...prev, [field]: value },
+    );
   }, []);
 
   const handleCreateLabelToggle = (labelId) => {
@@ -330,28 +387,31 @@ export default function Dashboard() {
   };
 
   const handleApplyFilters = (event) => {
-    if (event?.preventDefault) event.preventDefault();
+    event?.preventDefault?.();
+    window.clearTimeout(searchTimer.current);
     setCurrentPage(0);
     setActiveFilters({ ...filterForm });
   };
 
   const handleClearFilters = () => {
+    window.clearTimeout(searchTimer.current);
     setCurrentPage(0);
     setFilterForm(INITIAL_FILTER_STATE);
     setActiveFilters(INITIAL_FILTER_STATE);
   };
 
-  const handlePageChange = (newPage) => {
-    setCurrentPage(newPage);
-  };
-
   const setView = (nextView) => {
+    if (nextView === view) return;
     const search = locationSearch(selectedProjectId, nextView);
     if (bugId) navigate(`/dashboard/bugs/${bugId}${search}`);
     else setSearchParams(search ? search.slice(1) : "");
   };
 
   const handleStatusChange = async (bugToMove, status) => {
+    if (bugToMove.status === status) return;
+    const from = bugToMove.status;
+    setBugs((prev) => prev.map((item) => (item.id === bugToMove.id ? { ...item, status } : item)));
+    setSummary((prev) => (prev ? { ...prev, [from]: prev[from] - 1, [status]: prev[status] + 1 } : prev));
     try {
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugToMove.id}`, {
         method: "PATCH",
@@ -360,31 +420,36 @@ export default function Dashboard() {
       });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error(await readError(response, "Could not move issue."));
+        throw new Error(await readError(response, "Could not move the issue."));
       }
-      await fetchBugs({ showLoading: false });
-      await loadSummary();
+      if (String(bugToMove.id) === bugId) setDetailSync((value) => value + 1);
+      toast(`${issueKey(bugToMove)} moved to ${statusLabel(status)}.`);
+      void fetchBugs({ showLoading: false });
+      void loadSummary();
     } catch (err) {
-      toast(err.message || "Could not move issue.", "error");
+      setBugs((prev) => prev.map((item) => (item.id === bugToMove.id ? { ...item, status: from } : item)));
+      void loadSummary();
+      toast(err.message, "error");
     }
   };
 
-  const openCreate = () => {
+  const openCreate = useCallback(() => {
     setForm({
       ...INITIAL_FORM_STATE,
       project_id: selectedProjectId ? String(selectedProjectId) : "",
     });
     setCreateOpen(true);
-  };
+  }, [selectedProjectId]);
 
   const handleCreateBug = async (event) => {
-    if (event?.preventDefault) event.preventDefault();
+    event?.preventDefault?.();
     if (!form.title.trim()) {
-      toast("Title is required.", "error");
+      toast("Give the issue a title first.", "error");
       return;
     }
     try {
       setSubmitting(true);
+      const toId = (value) => (value === "" ? null : Number(value));
       const payload = {
         title: form.title.trim(),
         description: form.description.trim() || null,
@@ -393,13 +458,12 @@ export default function Dashboard() {
         issue_type: form.issue_type,
         story_points: form.story_points === "" ? null : Number(form.story_points),
         project_id: effectiveCreateProjectId || null,
-        epic_id: form.epic_id === "" ? null : Number(form.epic_id),
-        sprint_id: form.sprint_id === "" ? null : Number(form.sprint_id),
-        component_id: form.component_id === "" ? null : Number(form.component_id),
-        fix_version_id: form.fix_version_id === "" ? null : Number(form.fix_version_id),
-        affects_version_id:
-          form.affects_version_id === "" ? null : Number(form.affects_version_id),
-        assignee_id: form.assignee_id === "" ? null : Number(form.assignee_id),
+        epic_id: toId(form.epic_id),
+        sprint_id: toId(form.sprint_id),
+        component_id: toId(form.component_id),
+        fix_version_id: toId(form.fix_version_id),
+        affects_version_id: toId(form.affects_version_id),
+        assignee_id: toId(form.assignee_id),
         due_at: form.due_at || null,
         reminder_at: form.reminder_at || null,
         label_ids: form.label_ids,
@@ -411,42 +475,37 @@ export default function Dashboard() {
       });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error(await readError(response, "Failed to create issue."));
+        throw new Error(await readError(response, "Could not create the issue."));
       }
-      await response.json();
-      await fetchBugs({ showLoading: false, page: 0 });
-      await loadSummary();
+      const created = await response.json();
       setCurrentPage(0);
-      setForm({
-        ...INITIAL_FORM_STATE,
-        project_id: selectedProjectId ? String(selectedProjectId) : "",
-      });
+      await fetchBugs({ showLoading: false, page: 0 });
+      void loadSummary();
       setCreateOpen(false);
-      toast("Issue created.");
+      toast(`${created.issue_key} created.`);
     } catch (err) {
-      toast(err.message || "Something went wrong while creating the issue.", "error");
+      toast(err.message, "error");
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleDeleteBug = async (bugToDelete) => {
-    if (!window.confirm(`Delete "${bugToDelete.title}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete ${issueKey(bugToDelete)} "${bugToDelete.title}"? This cannot be undone.`)) return;
     try {
       setDeletingId(bugToDelete.id);
-      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugToDelete.id}`, {
-        method: "DELETE",
-      });
+      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugToDelete.id}`, { method: "DELETE" });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error(await readError(response, "Failed to delete issue."));
+        throw new Error(await readError(response, "Could not delete the issue."));
       }
-      await fetchBugs({ showLoading: false });
-      await loadSummary();
-      if (String(bugToDelete.id) === bugId) navigate(`/dashboard${locationSearch(selectedProjectId)}`);
-      toast("Issue deleted.");
+      setBugs((prev) => prev.filter((item) => item.id !== bugToDelete.id));
+      if (String(bugToDelete.id) === bugId) closeDetail();
+      toast(`${issueKey(bugToDelete)} deleted.`);
+      void fetchBugs({ showLoading: false });
+      void loadSummary();
     } catch (err) {
-      toast(err.message || "Something went wrong while deleting the issue.", "error");
+      toast(err.message, "error");
     } finally {
       setDeletingId(null);
     }
@@ -454,216 +513,394 @@ export default function Dashboard() {
 
   const handleIssueUpdated = useCallback(
     async (updatedBug) => {
-      setBugs((prev) =>
-        prev.map((item) => (item.id === updatedBug.id ? { ...item, ...updatedBug } : item)),
-      );
+      setBugs((prev) => prev.map((item) => (item.id === updatedBug.id ? { ...item, ...updatedBug } : item)));
+      void loadSummary();
       await fetchBugs({ showLoading: false });
-      if (updatedBug.project_id === selectedProjectId || selectedProjectId != null) {
-        await refreshSelectedProjectCatalog();
-      }
+      if (selectedProjectId != null) await refreshSelectedProjectCatalog();
     },
-    [fetchBugs, refreshSelectedProjectCatalog, selectedProjectId],
+    [fetchBugs, loadSummary, refreshSelectedProjectCatalog, selectedProjectId],
   );
 
   const handleMoveBug = async (index, direction) => {
     if (selectedProjectId == null) return;
     const swapIndex = index + direction;
     if (swapIndex < 0 || swapIndex >= bugs.length) return;
-    const orderedIds = bugs.map((bug) => bug.id);
-    [orderedIds[index], orderedIds[swapIndex]] = [orderedIds[swapIndex], orderedIds[index]];
+    const reordered = [...bugs];
+    [reordered[index], reordered[swapIndex]] = [reordered[swapIndex], reordered[index]];
+    const previous = bugs;
+    setBugs(reordered);
     try {
       setReorderingId(bugs[index].id);
-      const response = await fetchWithAuth(
-        `${API_BASE_URL}/bugs/reorder?project_id=${selectedProjectId}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ordered_ids: orderedIds }),
-        },
-      );
+      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/reorder?project_id=${selectedProjectId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ordered_ids: reordered.map((bug) => bug.id) }),
+      });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error(await readError(response, "Failed to reorder backlog."));
+        throw new Error(await readError(response, "Could not reorder the backlog."));
       }
-      await fetchBugs({ showLoading: false });
-      toast("Backlog reordered.");
+      void fetchBugs({ showLoading: false });
     } catch (err) {
-      toast(err.message || "Something went wrong while reordering.", "error");
+      setBugs(previous);
+      toast(err.message, "error");
     } finally {
       setReorderingId(null);
     }
   };
 
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (document.querySelector(".modal-backdrop, .popover[data-open]")) return;
+      if (event.key === "Escape") {
+        if (navOpen) setNavOpen(false);
+        else if (bugId && !isTypingTarget(event.target)) closeDetail();
+        return;
+      }
+      if (isTypingTarget(event.target)) return;
+      if (event.key === "/") {
+        event.preventDefault();
+        document.getElementById("issue-search")?.focus();
+      } else if (event.key === "c" || event.key === "C") {
+        event.preventDefault();
+        openCreate();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [bugId, closeDetail, navOpen, openCreate]);
+
   const isOwner = selectedProject?.owner_id === auth?.user_id;
+  const activeBugId = bugId ? Number(bugId) : null;
+  const pageTitle = selectedProject ? selectedProject.name : "All issues";
+  const lead =
+    selectedProject?.description ||
+    (selectedProject
+      ? `Issues are keyed ${selectedProject.key}-1, ${selectedProject.key}-2, and so on.`
+      : "Everything across the projects you belong to.");
+  const countText = `${totalBugs} ${totalBugs === 1 ? "issue" : "issues"}${
+    activeFilterCount > 0 && summary ? ` of ${summary.total}` : ""
+  }`;
 
-  return (
-    <div className="app">
-      <a href="#main-content" className="skip-link">
-        Skip to main content
-      </a>
-
-      <header className="topbar">
-        <div className="topbar__brand">
-          <span className="topbar__mark">Mini Jira</span>
-        </div>
-        <div className="topbar__right">
-          <NotificationCenter fetchWithAuth={fetchWithAuth} />
+  const sidebar = (
+    <ProjectSidebar
+      projects={projects}
+      fetchWithAuth={fetchWithAuth}
+      selectedProjectId={selectedProjectId}
+      onSelectProject={handleSelectProject}
+      onProjectsChange={loadProjects}
+      currentUserId={auth?.user_id}
+      footer={
+        <>
           <AccountMenu
             auth={auth}
             fetchWithAuth={fetchWithAuth}
             onLogout={handleLogout}
             onAuthUpdated={updateAuth}
           />
-        </div>
-      </header>
+          <NotificationCenter fetchWithAuth={fetchWithAuth} />
+        </>
+      }
+    />
+  );
 
-      <div className="workspace">
-        <ProjectSidebar
-          projects={projects}
-          fetchWithAuth={fetchWithAuth}
-          selectedProjectId={selectedProjectId}
-          onSelectProject={handleSelectProject}
-          onProjectsChange={refreshProjects}
-          currentUserId={auth?.user_id}
-        />
+  const detail = bugId && (
+    <IssueDetailPanel
+      key={bugId}
+      bugId={bugId}
+      fetchWithAuth={fetchWithAuth}
+      auth={auth}
+      projects={projects}
+      syncToken={detailSync}
+      onClose={closeDetail}
+      onOpenIssue={openIssue}
+      onIssueUpdated={handleIssueUpdated}
+    />
+  );
 
-        <main className={`main ${bugId ? "main--with-detail" : ""}`}>
-          <div className="page__header">
-            <div className="page__header-main">
-              <h1 className="page__title">
-                {selectedProject ? selectedProject.name : "All issues"}
-              </h1>
-              <p className="page__description">{countLine}</p>
-              {selectedProject?.description && (
-                <p className="page__note">{selectedProject.description}</p>
-              )}
-            </div>
-            <div className="page__actions">
-              <div className="view-toggle" role="tablist" aria-label="Issue view">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={view === "list"}
-                  className={view === "list" ? "is-active" : ""}
-                  onClick={() => setView("list")}
+  return (
+    <div className="app">
+      <a href="#main-content" className="skip-link">
+        Skip to issues
+      </a>
+
+      {isCompact ? (
+        <AnimatePresence>
+          {navOpen && (
+            <motion.div
+              key="nav-backdrop"
+              className="scrim"
+              onClick={() => setNavOpen(false)}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            />
+          )}
+          {navOpen && (
+            <motion.div
+              key="nav-drawer"
+              className="drawer"
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{ duration: 0.28, ease: easeOut }}
+            >
+              {sidebar}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      ) : (
+        <div className="app__nav">{sidebar}</div>
+      )}
+
+      <div className="app__main">
+        {isCompact && (
+          <header className="mobile-bar">
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Open navigation"
+              aria-expanded={navOpen}
+              onClick={() => setNavOpen(true)}
+            >
+              <MenuIcon size={19} />
+            </button>
+            <span className="mobile-bar__brand">
+              <BrandMark size={22} />
+              Mini Jira
+            </span>
+            <button type="button" className="icon-button icon-button--solid" aria-label="New issue" onClick={openCreate}>
+              <PlusIcon size={18} />
+            </button>
+          </header>
+        )}
+
+        <main className="page" id="main-content" tabIndex={-1}>
+          <header className="page-head">
+            <div className="page-head__text">
+              <div className="page-head__title-row">
+                {selectedProject && <ProjectMonogram project={selectedProject} size="lg" />}
+                <motion.h1
+                  key={pageTitle}
+                  className="page-head__title"
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.22, ease: easeOut }}
                 >
-                  List
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={view === "board"}
-                  className={view === "board" ? "is-active" : ""}
-                  onClick={() => setView("board")}
-                >
-                  Board
-                </button>
+                  {pageTitle}
+                </motion.h1>
               </div>
+              <p className="page-head__lead">{lead}</p>
+            </div>
+            <div className="page-head__actions">
               {selectedProject && (
                 <button type="button" className="btn" onClick={() => setMembersOpen(true)}>
+                  <UsersIcon size={15} />
                   People
                 </button>
               )}
               {selectedProject && isOwner && (
-                <button type="button" className="btn" onClick={() => setCatalogOpen(true)}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setCatalogOpen(true)}
+                  disabled={!selectedProjectCatalog}
+                >
+                  <PlanningIcon size={15} />
                   Planning
                 </button>
               )}
-              <button type="button" className="btn btn--primary" onClick={openCreate}>
-                New issue
-              </button>
-            </div>
-          </div>
-
-          <IssueFiltersBar
-            filterForm={filterForm}
-            onFilterChange={handleFilterFieldChange}
-            onApply={handleApplyFilters}
-            onClear={handleClearFilters}
-            activeFilterCount={activeFilterCount}
-            selectedProjectCatalog={selectedProjectCatalog}
-          />
-          <div id="main-content" className="page__body" tabIndex={-1}>
-            <div className="page__inner">
-              {view === "board" ? (
-                <BoardView
-                  bugs={bugs}
-                  activeBugId={bugId ? Number(bugId) : null}
-                  onOpen={(id) => navigate(`/dashboard/bugs/${id}${locationSearch(selectedProjectId, "board")}`)}
-                  onMoveStatus={handleStatusChange}
-                />
-              ) : (
-                <IssueListSection
-                  loading={loading}
-                  listLoadComplete={listLoadComplete}
-                  fetchError={fetchError}
-                  bugs={bugs}
-                  totalBugs={totalBugs}
-                  totalPages={totalPages}
-                  currentPage={currentPage}
-                  PAGE_SIZE={PAGE_SIZE}
-                  activeFilters={activeFilters}
-                  activeFilterCount={activeFilterCount}
-                  selectedProjectId={selectedProjectId}
-                  deletingId={deletingId}
-                  reorderingId={reorderingId}
-                  onRefresh={() => void fetchBugs({ showLoading: true })}
-                  onRetry={() => void fetchBugs({ showLoading: true })}
-                  onNavigateIssue={(id) => navigate(`/dashboard/bugs/${id}${locationSearch(selectedProjectId)}`)}
-                  onDeleteBug={handleDeleteBug}
-                  onMoveBug={handleMoveBug}
-                  onPageChange={handlePageChange}
-                  activeBugId={bugId ? Number(bugId) : null}
-                />
+              {!isCompact && (
+                <button type="button" className="btn btn--primary" onClick={openCreate}>
+                  <PlusIcon size={15} />
+                  New issue
+                  <kbd className="btn__kbd">C</kbd>
+                </button>
               )}
             </div>
+          </header>
+
+          <section className="overview" aria-label="Status overview">
+            <FlowBar summary={summary} />
+            <dl className="overview__stats">
+              <div className="stat stat--alert">
+                <dt>High priority</dt>
+                <dd>{summary?.high_priority ?? 0}</dd>
+              </div>
+              <div className="stat">
+                <dt>Unassigned</dt>
+                <dd>{summary?.unassigned ?? 0}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <div className="toolbar">
+            <ViewToggle view={view} onChange={setView} />
+            <IssueFiltersBar
+              filterForm={filterForm}
+              onFilterChange={handleFilterFieldChange}
+              onApply={handleApplyFilters}
+              onClear={handleClearFilters}
+              activeFilterCount={activeFilterCount}
+              selectedProjectCatalog={selectedProjectCatalog}
+            />
+            <span className="toolbar__count" aria-live="polite">
+              {listLoadComplete ? countText : ""}
+            </span>
           </div>
 
-          {bugId && (
-            <IssueDetailPanel
-              bugId={bugId}
-              fetchWithAuth={fetchWithAuth}
-              auth={auth}
-              projects={projects}
-              onClose={() => navigate(`/dashboard${locationSearch(selectedProjectId)}`)}
-              onIssueUpdated={handleIssueUpdated}
-            />
-          )}
+          <div className="page-content">
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={view}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, transition: { duration: 0.1 } }}
+                transition={{ duration: 0.2, ease: easeOut }}
+              >
+                {view === "board" ? (
+                  fetchError || (!listLoadComplete && loading) || (bugs.length === 0 && listLoadComplete) ? (
+                    <IssueListSection
+                      loading={loading}
+                      listLoadComplete={listLoadComplete}
+                      fetchError={fetchError}
+                      bugs={[]}
+                      totalBugs={0}
+                      totalPages={1}
+                      currentPage={0}
+                      PAGE_SIZE={PAGE_SIZE}
+                      activeFilters={activeFilters}
+                      activeFilterCount={activeFilterCount}
+                      selectedProjectId={selectedProjectId}
+                      onRetry={() => void fetchBugs()}
+                      onCreate={openCreate}
+                      onClearFilters={handleClearFilters}
+                    />
+                  ) : (
+                    <BoardView
+                      bugs={bugs}
+                      activeBugId={activeBugId}
+                      loading={loading}
+                      onOpen={openIssue}
+                      onMoveStatus={handleStatusChange}
+                      onCreate={openCreate}
+                    />
+                  )
+                ) : (
+                  <IssueListSection
+                    loading={loading}
+                    listLoadComplete={listLoadComplete}
+                    fetchError={fetchError}
+                    bugs={bugs}
+                    totalBugs={totalBugs}
+                    totalPages={totalPages}
+                    currentPage={currentPage}
+                    PAGE_SIZE={PAGE_SIZE}
+                    activeFilters={activeFilters}
+                    activeFilterCount={activeFilterCount}
+                    selectedProjectId={selectedProjectId}
+                    deletingId={deletingId}
+                    reorderingId={reorderingId}
+                    onRetry={() => void fetchBugs()}
+                    onNavigateIssue={openIssue}
+                    onDeleteBug={handleDeleteBug}
+                    onMoveBug={handleMoveBug}
+                    onPageChange={setCurrentPage}
+                    onCreate={openCreate}
+                    onClearFilters={handleClearFilters}
+                    activeBugId={activeBugId}
+                  />
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </div>
         </main>
       </div>
 
-      {createOpen && (
-        <CreateIssueModal
-          form={form}
-          projects={projects}
-          createCatalog={createCatalog}
-          effectiveCreateProjectId={effectiveCreateProjectId}
-          onFieldChange={handleFormFieldChange}
-          onLabelToggle={handleCreateLabelToggle}
-          onSubmit={handleCreateBug}
-          onClose={() => setCreateOpen(false)}
-          submitting={submitting}
-        />
+      {isDocked ? (
+        <AnimatePresence initial={false}>
+          {bugId && (
+            <motion.aside
+              key="dock"
+              className="dock"
+              aria-label="Issue details"
+              initial={{ width: 0 }}
+              animate={{ width: DOCK_WIDTH }}
+              exit={{ width: 0 }}
+              transition={{ duration: 0.3, ease: easeOut }}
+            >
+              <div className="dock__inner" style={{ width: DOCK_WIDTH }}>
+                {detail}
+              </div>
+            </motion.aside>
+          )}
+        </AnimatePresence>
+      ) : (
+        <AnimatePresence>
+          {bugId && (
+            <motion.div
+              key="sheet-backdrop"
+              className="scrim scrim--sheet"
+              onClick={closeDetail}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            />
+          )}
+          {bugId && (
+            <motion.aside
+              key="sheet"
+              className="sheet"
+              aria-label="Issue details"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ duration: 0.3, ease: easeOut }}
+            >
+              {detail}
+            </motion.aside>
+          )}
+        </AnimatePresence>
       )}
 
-      {membersOpen && selectedProject && (
-        <MembersPanel
-          project={selectedProject}
-          isOwner={isOwner}
-          fetchWithAuth={fetchWithAuth}
-          onClose={() => setMembersOpen(false)}
-        />
-      )}
-
-      {catalogOpen && selectedProject && selectedProjectCatalog && (
-        <ProjectCatalogModal
-          project={selectedProject}
-          catalog={selectedProjectCatalog}
-          fetchWithAuth={fetchWithAuth}
-          onCatalogChange={refreshSelectedProjectCatalog}
-          onClose={() => setCatalogOpen(false)}
-        />
-      )}
+      <AnimatePresence>
+        {createOpen && (
+          <CreateIssueModal
+            key="create"
+            form={form}
+            projects={projects}
+            createCatalog={createCatalog}
+            effectiveCreateProjectId={effectiveCreateProjectId}
+            onFieldChange={handleFormFieldChange}
+            onLabelToggle={handleCreateLabelToggle}
+            onSubmit={handleCreateBug}
+            onClose={() => setCreateOpen(false)}
+            submitting={submitting}
+          />
+        )}
+        {membersOpen && selectedProject && (
+          <MembersPanel
+            key="members"
+            project={selectedProject}
+            isOwner={isOwner}
+            fetchWithAuth={fetchWithAuth}
+            onClose={() => setMembersOpen(false)}
+          />
+        )}
+        {catalogOpen && selectedProject && selectedProjectCatalog && (
+          <ProjectCatalogModal
+            key="catalog"
+            project={selectedProject}
+            catalog={selectedProjectCatalog}
+            fetchWithAuth={fetchWithAuth}
+            onCatalogChange={refreshSelectedProjectCatalog}
+            onClose={() => setCatalogOpen(false)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
