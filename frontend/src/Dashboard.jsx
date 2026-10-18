@@ -124,7 +124,7 @@ export default function Dashboard() {
   const { auth, logout, updateAuth } = useAuth();
   const view = searchParams.get("view") === "board" ? "board" : "list";
   const isCompact = useMediaQuery("(max-width: 899px)");
-  const isDocked = useMediaQuery("(min-width: 1100px)");
+  const isDocked = useMediaQuery("(min-width: 1280px)");
 
   const [bugs, setBugs] = useState([]);
   const [projects, setProjects] = useState([]);
