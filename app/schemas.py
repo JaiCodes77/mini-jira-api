@@ -1,9 +1,13 @@
 from datetime import datetime
-from typing import Generic, Optional, TypeVar
+from typing import Generic, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from app.models import BugPriority, BugStatus, IssueType, LinkType, SprintState
+from app.models import BugPriority, BugStatus, IssueType, LinkType, ProjectRole, SprintState
+
+USERNAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,49}$"
+PROJECT_KEY_PATTERN = r"^[A-Za-z][A-Za-z0-9]{1,9}$"
+HEX_COLOR_PATTERN = r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
 
 
 class ORMModel(BaseModel):
@@ -11,9 +15,14 @@ class ORMModel(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str
-    email: str
-    password: str
+    username: str = Field(pattern=USERNAME_PATTERN)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.lower()
 
 
 class UserUpdatePreferences(BaseModel):
@@ -42,15 +51,43 @@ class Token(BaseModel):
 
 
 class ProjectCreate(BaseModel):
-    name: str
-    key: str
-    description: Optional[str] = None
+    name: str = Field(min_length=1, max_length=100)
+    key: str = Field(pattern=PROJECT_KEY_PATTERN)
+    description: Optional[str] = Field(default=None, max_length=5000)
+
+    @field_validator("key")
+    @classmethod
+    def normalize_key(cls, value: str) -> str:
+        return value.upper()
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Name cannot be blank")
+        return cleaned
 
 
 class ProjectUpdate(BaseModel):
-    name: Optional[str] = None
-    key: Optional[str] = None
-    description: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    key: Optional[str] = Field(default=None, pattern=PROJECT_KEY_PATTERN)
+    description: Optional[str] = Field(default=None, max_length=5000)
+
+    @field_validator("key")
+    @classmethod
+    def normalize_key(cls, value: str | None) -> str | None:
+        return value.upper() if value is not None else None
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Name cannot be blank")
+        return cleaned
 
 
 class ProjectSummary(ORMModel):
@@ -67,13 +104,13 @@ class ProjectResponse(ProjectSummary):
 
 
 class LabelCreate(BaseModel):
-    name: str
-    color: str = "#7C3AED"
+    name: str = Field(min_length=1, max_length=50)
+    color: str = Field(default="#C4A574", pattern=HEX_COLOR_PATTERN)
 
 
 class LabelUpdate(BaseModel):
-    name: Optional[str] = None
-    color: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    color: Optional[str] = Field(default=None, pattern=HEX_COLOR_PATTERN)
 
 
 class LabelResponse(ORMModel):
@@ -243,11 +280,11 @@ class NotificationUpdate(BaseModel):
 
 
 class CommentCreate(BaseModel):
-    body: str
+    body: str = Field(min_length=1, max_length=10000)
 
 
 class CommentUpdate(BaseModel):
-    body: str
+    body: str = Field(min_length=1, max_length=10000)
 
 
 class CommentResponse(BaseModel):
@@ -262,12 +299,20 @@ class CommentResponse(BaseModel):
 
 
 class BugCreate(BaseModel):
-    title: str
-    description: Optional[str] = None
+    title: str = Field(min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=20000)
     status: BugStatus = BugStatus.open
     priority: BugPriority = BugPriority.medium
     issue_type: IssueType = IssueType.bug
-    story_points: Optional[int] = None
+    story_points: Optional[int] = Field(default=None, ge=0, le=100)
+
+    @field_validator("title")
+    @classmethod
+    def strip_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Title cannot be blank")
+        return cleaned
     project_id: Optional[int] = None
     epic_id: Optional[int] = None
     sprint_id: Optional[int] = None
@@ -284,12 +329,22 @@ class BugCreate(BaseModel):
 
 
 class BugUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=20000)
     status: Optional[BugStatus] = None
     priority: Optional[BugPriority] = None
     issue_type: Optional[IssueType] = None
-    story_points: Optional[int] = None
+    story_points: Optional[int] = Field(default=None, ge=0, le=100)
+
+    @field_validator("title")
+    @classmethod
+    def strip_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Title cannot be blank")
+        return cleaned
     project_id: Optional[int] = None
     epic_id: Optional[int] = None
     sprint_id: Optional[int] = None
@@ -307,6 +362,7 @@ class BugUpdate(BaseModel):
 
 class BugResponse(ORMModel):
     id: int
+    issue_key: str
     title: str
     description: Optional[str] = None
     status: BugStatus
@@ -351,6 +407,33 @@ class BugReorderRequest(BaseModel):
     ordered_ids: list[int]
 
 
+class MemberCreate(BaseModel):
+    username: str = Field(pattern=USERNAME_PATTERN)
+    role: Literal["member", "viewer"] = "member"
+
+
+class MemberUpdate(BaseModel):
+    role: Literal["member", "viewer"]
+
+
+class MemberResponse(BaseModel):
+    id: int
+    user_id: int
+    username: str
+    email: str
+    role: ProjectRole
+    created_at: datetime
+
+
+class BugSummary(BaseModel):
+    total: int
+    open: int
+    in_progress: int
+    closed: int
+    high_priority: int
+    unassigned: int
+
+
 class ProjectCatalogResponse(BaseModel):
     project: ProjectResponse
     epics: list[EpicResponse] = Field(default_factory=list)
@@ -359,6 +442,7 @@ class ProjectCatalogResponse(BaseModel):
     components: list[ComponentResponse] = Field(default_factory=list)
     versions: list[VersionResponse] = Field(default_factory=list)
     users: list[UserSummary] = Field(default_factory=list)
+    members: list[MemberResponse] = Field(default_factory=list)
 
 
 T = TypeVar("T")

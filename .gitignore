@@ -1,7 +1,12 @@
 .venv/
 __pycache__/
 *.pyc
+*.db
 mini_jira.db
+uploaded_attachments/
+.env
 frontend/node_modules/
 frontend/dist/
 frontend/.env
+.pytest_cache/
+.alembic/

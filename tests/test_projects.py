@@ -143,14 +143,15 @@ async def test_issue_can_move_between_projects_with_project_scoped_metadata(clie
     assert updated_bug["epic_id"] == epic_b["id"]
     assert [label["id"] for label in updated_bug["labels"]] == [label_b["id"]]
 
-    catalog_resp = await client.get(f"/projects/{project_b['id']}/catalog")
+    catalog_resp = await client.get(f"/projects/{project_b['id']}/catalog", headers=owner["headers"])
     assert catalog_resp.status_code == 200
     catalog = catalog_resp.json()
     assert any(epic["id"] == epic_b["id"] for epic in catalog["epics"])
     assert any(label["id"] == label_b["id"] for label in catalog["labels"])
 
     project_b_bugs_resp = await client.get(
-        f"/projects/{project_b['id']}/bugs?limit=20&offset=0"
+        f"/projects/{project_b['id']}/bugs?limit=20&offset=0",
+        headers=owner["headers"],
     )
     assert project_b_bugs_resp.status_code == 200
     assert [item["id"] for item in project_b_bugs_resp.json()["items"]] == [updated_bug["id"]]

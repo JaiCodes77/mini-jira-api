@@ -1,14 +1,17 @@
-import os
 import re
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./mini_jira.db")
+from app.config import settings
+
+SQLALCHEMY_DATABASE_URL = settings.database_url
+
+_connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args=_connect_args,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -81,6 +84,13 @@ def init_db():
                         )
                     )
                 existing_columns.add(column_name)
+
+        if "bugs" in existing_tables:
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_bugs_status ON bugs (status)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_bugs_priority ON bugs (priority)"))
+            connection.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_bugs_project_status ON bugs (project_id, status)")
+            )
 
 
 def get_db():

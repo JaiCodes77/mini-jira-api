@@ -1,10 +1,45 @@
+import { AnimatePresence, motion } from "framer-motion";
+import { useState } from "react";
 import Modal from "./Modal";
+import { ChevronDownIcon } from "./Icons";
 import {
   ISSUE_TYPE_OPTIONS,
   PRIORITY_OPTIONS,
-  STATUS_OPTIONS,
+  STATUS_STEPS,
   titleFromEnum,
 } from "../issueConstants";
+
+function SelectField({ label, value, onChange, children, disabled }) {
+  return (
+    <label className="field">
+      <span className="field__label">{label}</span>
+      <select className="select" value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled}>
+        {children}
+      </select>
+    </label>
+  );
+}
+
+export function LabelPicker({ labels, selected, onToggle }) {
+  return (
+    <div className="label-picker">
+      {labels.map((label) => {
+        const active = selected.includes(label.id);
+        return (
+          <label
+            key={label.id}
+            className={`label-option ${active ? "is-active" : ""}`}
+            style={{ "--label-color": label.color }}
+          >
+            <input type="checkbox" checked={active} onChange={() => onToggle(label.id)} />
+            <span className="label-option__dot" />
+            {label.name}
+          </label>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function CreateIssueModal({
   form,
@@ -17,284 +52,235 @@ export default function CreateIssueModal({
   onClose,
   submitting,
 }) {
+  const [showMore, setShowMore] = useState(false);
+  const catalog = createCatalog;
+  const set = (field) => (value) => onFieldChange(field, value);
+
   const footer = (
     <>
-      <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+      <span className="modal__hint">
+        <kbd>Ctrl</kbd>
+        <kbd>Enter</kbd> to create
+      </span>
+      <button type="button" className="btn btn--ghost" onClick={onClose} disabled={submitting}>
         Cancel
       </button>
       <button
         type="submit"
         className="btn btn--primary"
         form="create-issue-form"
-        disabled={submitting}
+        disabled={submitting || !form.title.trim()}
       >
-        {submitting ? (
-          <>
-            <span className="spinner" aria-hidden />
-            Creating…
-          </>
-        ) : (
-          "Create issue"
-        )}
+        {submitting && <span className="spinner" aria-hidden="true" />}
+        {submitting ? "Creating…" : "Create issue"}
       </button>
     </>
   );
 
   return (
-    <Modal
-      title="Create new issue"
-      subtitle="Capture the work with full project context."
-      onClose={onClose}
-      footer={footer}
-      size="wide"
-    >
-      <form id="create-issue-form" onSubmit={onSubmit} className="fields-grid create-issue-form">
-        <label className="field field--full">
-          <span className="field__label">Title</span>
-          <input
-            className="input"
-            type="text"
-            placeholder="Short, actionable summary"
-            value={form.title}
-            onChange={(e) => onFieldChange("title", e.target.value)}
-            autoFocus
-            required
-          />
+    <Modal title="New issue" onClose={onClose} footer={footer} size="lg">
+      <form
+        id="create-issue-form"
+        className="create-form"
+        onSubmit={onSubmit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            if (form.title.trim() && !submitting) onSubmit(event);
+          }
+        }}
+      >
+        <label className="visually-hidden" htmlFor="create-title">
+          Title
         </label>
-
-        <label className="field field--full">
-          <span className="field__label">Description (Markdown supported)</span>
-          <textarea
-            className="textarea"
-            rows={5}
-            placeholder="Context, acceptance criteria, links…"
-            value={form.description}
-            onChange={(e) => onFieldChange("description", e.target.value)}
-          />
+        <input
+          id="create-title"
+          className="create-form__title"
+          type="text"
+          placeholder="Issue title"
+          value={form.title}
+          onChange={(event) => onFieldChange("title", event.target.value)}
+          maxLength={255}
+          autoFocus
+          required
+        />
+        <label className="visually-hidden" htmlFor="create-description">
+          Description
         </label>
+        <textarea
+          id="create-description"
+          className="create-form__description"
+          rows={4}
+          placeholder="Add context, steps to reproduce, or acceptance criteria. Markdown works."
+          value={form.description}
+          onChange={(event) => onFieldChange("description", event.target.value)}
+        />
 
-        <label className="field field--full">
-          <span className="field__label">Project</span>
-          <select
-            className="select"
-            value={form.project_id}
-            onChange={(e) => onFieldChange("project_id", e.target.value)}
-          >
-            <option value="">Match sidebar selection</option>
+        <div className="create-form__grid">
+          <SelectField label="Project" value={form.project_id} onChange={set("project_id")}>
+            <option value="">No project</option>
             {projects.map((project) => (
               <option key={project.id} value={project.id}>
-                {project.key} — {project.name}
+                {project.name} ({project.key})
               </option>
             ))}
-          </select>
-          {!effectiveCreateProjectId && (
-            <span className="field__hint">
-              Select a project to unlock epics, sprints, labels, and assignees.
-            </span>
-          )}
-        </label>
-
-        <label className="field">
-          <span className="field__label">Type</span>
-          <select
-            className="select"
-            value={form.issue_type}
-            onChange={(e) => onFieldChange("issue_type", e.target.value)}
-          >
+          </SelectField>
+          <SelectField label="Type" value={form.issue_type} onChange={set("issue_type")}>
             {ISSUE_TYPE_OPTIONS.map((option) => (
               <option key={option} value={option}>
                 {titleFromEnum(option)}
               </option>
             ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span className="field__label">Story points</span>
-          <input
-            className="input"
-            type="number"
-            min="0"
-            placeholder="—"
-            value={form.story_points}
-            onChange={(e) => onFieldChange("story_points", e.target.value)}
-          />
-        </label>
-
-        <label className="field">
-          <span className="field__label">Status</span>
-          <select
-            className="select"
-            value={form.status}
-            onChange={(e) => onFieldChange("status", e.target.value)}
-          >
-            {STATUS_OPTIONS.map((status) => (
-              <option key={status} value={status}>
-                {titleFromEnum(status)}
+          </SelectField>
+          <SelectField label="Priority" value={form.priority} onChange={set("priority")}>
+            {PRIORITY_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {titleFromEnum(option)}
               </option>
             ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span className="field__label">Priority</span>
-          <select
-            className="select"
-            value={form.priority}
-            onChange={(e) => onFieldChange("priority", e.target.value)}
-          >
-            {PRIORITY_OPTIONS.map((priority) => (
-              <option key={priority} value={priority}>
-                {titleFromEnum(priority)}
+          </SelectField>
+          <SelectField label="Status" value={form.status} onChange={set("status")}>
+            {STATUS_STEPS.map((step) => (
+              <option key={step.key} value={step.key}>
+                {step.label}
               </option>
             ))}
-          </select>
-        </label>
+          </SelectField>
+          <SelectField
+            label="Assignee"
+            value={form.assignee_id}
+            onChange={set("assignee_id")}
+            disabled={!catalog}
+          >
+            <option value="">Unassigned</option>
+            {catalog?.users.map((user) => (
+              <option key={user.id} value={user.id}>
+                {user.username}
+              </option>
+            ))}
+          </SelectField>
+          <label className="field">
+            <span className="field__label">Story points</span>
+            <input
+              className="input"
+              type="number"
+              min="0"
+              max="100"
+              placeholder="None"
+              value={form.story_points}
+              onChange={(event) => onFieldChange("story_points", event.target.value)}
+            />
+          </label>
+        </div>
 
-        {createCatalog && (
-          <>
-            <label className="field">
-              <span className="field__label">Assignee</span>
-              <select
-                className="select"
-                value={form.assignee_id}
-                onChange={(e) => onFieldChange("assignee_id", e.target.value)}
-              >
-                <option value="">Unassigned</option>
-                {createCatalog.users.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.username}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field__label">Epic</span>
-              <select
-                className="select"
-                value={form.epic_id}
-                onChange={(e) => onFieldChange("epic_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {createCatalog.epics.map((epic) => (
-                  <option key={epic.id} value={epic.id}>
-                    {epic.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field__label">Sprint</span>
-              <select
-                className="select"
-                value={form.sprint_id}
-                onChange={(e) => onFieldChange("sprint_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {createCatalog.sprints.map((sprint) => (
-                  <option key={sprint.id} value={sprint.id}>
-                    {sprint.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field__label">Component</span>
-              <select
-                className="select"
-                value={form.component_id}
-                onChange={(e) => onFieldChange("component_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {createCatalog.components.map((component) => (
-                  <option key={component.id} value={component.id}>
-                    {component.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field__label">Fix version</span>
-              <select
-                className="select"
-                value={form.fix_version_id}
-                onChange={(e) => onFieldChange("fix_version_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {createCatalog.versions.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    {version.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field__label">Affects version</span>
-              <select
-                className="select"
-                value={form.affects_version_id}
-                onChange={(e) => onFieldChange("affects_version_id", e.target.value)}
-              >
-                <option value="">None</option>
-                {createCatalog.versions.map((version) => (
-                  <option key={version.id} value={version.id}>
-                    {version.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span className="field__label">Due</span>
-              <input
-                className="input"
-                type="datetime-local"
-                value={form.due_at}
-                onChange={(e) => onFieldChange("due_at", e.target.value)}
-              />
-            </label>
-
-            <label className="field">
-              <span className="field__label">Reminder</span>
-              <input
-                className="input"
-                type="datetime-local"
-                value={form.reminder_at}
-                onChange={(e) => onFieldChange("reminder_at", e.target.value)}
-              />
-            </label>
-
-            {createCatalog.labels.length > 0 && (
-              <div className="field field--full">
-                <span className="field__label">Labels</span>
-                <div className="label-picker">
-                  {createCatalog.labels.map((label) => {
-                    const active = form.label_ids.includes(label.id);
-                    return (
-                      <label
-                        key={label.id}
-                        className={`label-chip ${active ? "label-chip--active" : ""}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={active}
-                          onChange={() => onLabelToggle(label.id)}
-                        />
-                        <span className="label-chip__dot" style={{ background: label.color }} />
-                        <span>{label.name}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </>
+        {!effectiveCreateProjectId && (
+          <p className="field__hint">Pick a project to assign people and use epics, sprints, and labels.</p>
         )}
+
+        <button
+          type="button"
+          className="disclosure"
+          aria-expanded={showMore}
+          onClick={() => setShowMore((value) => !value)}
+        >
+          <ChevronDownIcon size={15} className="disclosure__icon" />
+          {showMore ? "Fewer fields" : "More fields"}
+        </button>
+
+        <AnimatePresence initial={false}>
+          {showMore && (
+            <motion.div
+              key="more"
+              className="create-form__more"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }}
+            >
+              <div className="create-form__grid">
+                <SelectField label="Epic" value={form.epic_id} onChange={set("epic_id")} disabled={!catalog}>
+                  <option value="">None</option>
+                  {catalog?.epics.map((epic) => (
+                    <option key={epic.id} value={epic.id}>
+                      {epic.name}
+                    </option>
+                  ))}
+                </SelectField>
+                <SelectField label="Sprint" value={form.sprint_id} onChange={set("sprint_id")} disabled={!catalog}>
+                  <option value="">None</option>
+                  {catalog?.sprints.map((sprint) => (
+                    <option key={sprint.id} value={sprint.id}>
+                      {sprint.name}
+                    </option>
+                  ))}
+                </SelectField>
+                <SelectField
+                  label="Component"
+                  value={form.component_id}
+                  onChange={set("component_id")}
+                  disabled={!catalog}
+                >
+                  <option value="">None</option>
+                  {catalog?.components.map((component) => (
+                    <option key={component.id} value={component.id}>
+                      {component.name}
+                    </option>
+                  ))}
+                </SelectField>
+                <SelectField
+                  label="Fix version"
+                  value={form.fix_version_id}
+                  onChange={set("fix_version_id")}
+                  disabled={!catalog}
+                >
+                  <option value="">None</option>
+                  {catalog?.versions.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {version.name}
+                    </option>
+                  ))}
+                </SelectField>
+                <SelectField
+                  label="Affects version"
+                  value={form.affects_version_id}
+                  onChange={set("affects_version_id")}
+                  disabled={!catalog}
+                >
+                  <option value="">None</option>
+                  {catalog?.versions.map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {version.name}
+                    </option>
+                  ))}
+                </SelectField>
+                <label className="field">
+                  <span className="field__label">Due</span>
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    value={form.due_at}
+                    onChange={(event) => onFieldChange("due_at", event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span className="field__label">Reminder</span>
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    value={form.reminder_at}
+                    onChange={(event) => onFieldChange("reminder_at", event.target.value)}
+                  />
+                </label>
+              </div>
+              {catalog?.labels.length > 0 && (
+                <div className="field">
+                  <span className="field__label">Labels</span>
+                  <LabelPicker labels={catalog.labels} selected={form.label_ids} onToggle={onLabelToggle} />
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </form>
     </Modal>
   );

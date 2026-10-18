@@ -48,6 +48,12 @@ class SprintState(str, enum.Enum):
     completed = "completed"
 
 
+class ProjectRole(str, enum.Enum):
+    owner = "owner"
+    member = "member"
+    viewer = "viewer"
+
+
 class LinkType(str, enum.Enum):
     blocks = "blocks"
     relates = "relates"
@@ -104,6 +110,9 @@ class User(Base):
         foreign_keys="Bug.reporter_id",
     )
     comments: Mapped[list["Comment"]] = relationship("Comment", back_populates="author")
+    project_memberships: Mapped[list["ProjectMember"]] = relationship(
+        "ProjectMember", back_populates="user", cascade="all, delete-orphan"
+    )
     watched_bugs: Mapped[list["Bug"]] = relationship("Bug", secondary=bug_watchers, back_populates="watchers")
     notifications: Mapped[list["Notification"]] = relationship(
         "Notification", back_populates="user", cascade="all, delete-orphan"
@@ -132,6 +141,9 @@ class Project(Base):
     )
 
     owner: Mapped["User"] = relationship("User", back_populates="projects")
+    members: Mapped[list["ProjectMember"]] = relationship(
+        "ProjectMember", back_populates="project", cascade="all, delete-orphan"
+    )
     bugs: Mapped[list["Bug"]] = relationship("Bug", back_populates="project")
     labels: Mapped[list["Label"]] = relationship("Label", back_populates="project", cascade="all, delete-orphan")
     components: Mapped[list["Component"]] = relationship(
@@ -246,14 +258,38 @@ class Sprint(Base):
     bugs: Mapped[list["Bug"]] = relationship("Bug", back_populates="sprint")
 
 
+class ProjectMember(Base):
+    __tablename__ = "project_members"
+    __table_args__ = (UniqueConstraint("project_id", "user_id", name="uq_project_member"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[ProjectRole] = mapped_column(Enum(ProjectRole), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    project: Mapped["Project"] = relationship("Project", back_populates="members")
+    user: Mapped["User"] = relationship("User", back_populates="project_memberships")
+
+
 class Bug(Base):
     __tablename__ = "bugs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[BugStatus] = mapped_column(Enum(BugStatus), default=BugStatus.open, nullable=False)
-    priority: Mapped[BugPriority] = mapped_column(Enum(BugPriority), default=BugPriority.medium, nullable=False)
+    status: Mapped[BugStatus] = mapped_column(
+        Enum(BugStatus), default=BugStatus.open, nullable=False, index=True
+    )
+    priority: Mapped[BugPriority] = mapped_column(
+        Enum(BugPriority), default=BugPriority.medium, nullable=False, index=True
+    )
     issue_type: Mapped[IssueType] = mapped_column(Enum(IssueType), default=IssueType.bug, nullable=False)
     story_points: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     project_id: Mapped[Optional[int]] = mapped_column(
@@ -299,6 +335,11 @@ class Bug(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+    @property
+    def issue_key(self) -> str:
+        prefix = self.project.key if self.project is not None else "ISSUE"
+        return f"{prefix}-{self.id}"
 
     project: Mapped[Optional["Project"]] = relationship("Project", back_populates="bugs")
     epic: Mapped[Optional["Epic"]] = relationship("Epic", back_populates="bugs")

@@ -1,8 +1,143 @@
+import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { API_BASE_URL } from "./apiConfig";
+import { BrandMark, LayersIcon, PencilIcon, PlusIcon, TrashIcon } from "./components/Icons";
+import Modal from "./components/Modal";
 import { toast } from "./Toasts";
 
-const INITIAL_PROJECT_FORM = { name: "", key: "", description: "" };
+const EMPTY_FORM = { name: "", key: "", description: "" };
+const KEY_PATTERN = /^[A-Za-z][A-Za-z0-9]{1,9}$/;
+
+export function projectHue(key = "") {
+  let hue = 7;
+  for (const char of key) hue = (hue * 37 + char.charCodeAt(0)) % 360;
+  return hue;
+}
+
+export function ProjectMonogram({ project, size = "md" }) {
+  return (
+    <span
+      className={`monogram monogram--${size}`}
+      style={{ "--monogram-hue": projectHue(project.key) }}
+      aria-hidden="true"
+    >
+      {project.key.slice(0, 2)}
+    </span>
+  );
+}
+
+function suggestKey(name) {
+  const words = name
+    .replace(/[^A-Za-z0-9 ]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  let key =
+    words.length > 1
+      ? words.map((word) => word[0]).join("").slice(0, 5)
+      : (words[0] || "").slice(0, 4);
+  key = key.toUpperCase().replace(/^[0-9]+/, "");
+  if (key.length === 1) key = `${key}${(words[0] || "X").slice(1, 2).toUpperCase() || "X"}`;
+  return key;
+}
+
+async function readError(response, fallback) {
+  const body = await response.json().catch(() => null);
+  if (Array.isArray(body?.detail)) return body.detail.map((item) => item.msg).join(" ");
+  return typeof body?.detail === "string" ? body.detail : fallback;
+}
+
+function ProjectFormModal({ initial, onSubmit, onClose }) {
+  const isEdit = Boolean(initial);
+  const [form, setForm] = useState(initial ?? EMPTY_FORM);
+  const [keyTouched, setKeyTouched] = useState(isEdit);
+  const [busy, setBusy] = useState(false);
+  const keyValid = KEY_PATTERN.test(form.key);
+
+  const update = (field, value) => {
+    setForm((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === "name" && !keyTouched) next.key = suggestKey(value);
+      return next;
+    });
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (!form.name.trim() || !keyValid) return;
+    setBusy(true);
+    const ok = await onSubmit({
+      name: form.name.trim(),
+      key: form.key.trim().toUpperCase(),
+      description: form.description.trim() || null,
+    });
+    if (!ok) setBusy(false);
+  };
+
+  return (
+    <Modal
+      title={isEdit ? "Edit project" : "New project"}
+      subtitle={isEdit ? undefined : "Issues in this project get keys like KEY-12."}
+      onClose={onClose}
+      size="sm"
+      footer={
+        <>
+          <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="project-form"
+            className="btn btn--primary"
+            disabled={busy || !form.name.trim() || !keyValid}
+          >
+            {busy && <span className="spinner" aria-hidden="true" />}
+            {isEdit ? "Save project" : "Create project"}
+          </button>
+        </>
+      }
+    >
+      <form id="project-form" className="stack" onSubmit={handleSubmit}>
+        <label className="field">
+          <span className="field__label">Name</span>
+          <input
+            className="input"
+            value={form.name}
+            onChange={(event) => update("name", event.target.value)}
+            placeholder="Payments platform"
+            maxLength={100}
+          />
+        </label>
+        <label className="field">
+          <span className="field__label">Key</span>
+          <input
+            className="input input--key"
+            value={form.key}
+            onChange={(event) => {
+              setKeyTouched(true);
+              update("key", event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""));
+            }}
+            placeholder="PAY"
+            maxLength={10}
+            aria-invalid={form.key !== "" && !keyValid}
+          />
+          <span className={`field__hint ${form.key && !keyValid ? "field__hint--error" : ""}`}>
+            2 to 10 letters or digits, starting with a letter.
+          </span>
+        </label>
+        <label className="field">
+          <span className="field__label">Description</span>
+          <textarea
+            className="textarea"
+            rows={3}
+            value={form.description}
+            onChange={(event) => update("description", event.target.value)}
+            placeholder="What this project is for (optional)"
+          />
+        </label>
+      </form>
+    </Modal>
+  );
+}
 
 export default function ProjectSidebar({
   projects,
@@ -11,304 +146,179 @@ export default function ProjectSidebar({
   onSelectProject,
   onProjectsChange,
   currentUserId,
+  footer,
 }) {
-  const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState(INITIAL_PROJECT_FORM);
-  const [submitting, setSubmitting] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState(INITIAL_PROJECT_FORM);
+  const [modal, setModal] = useState(null);
 
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    if (!form.name.trim() || !form.key.trim()) {
-      toast("Name and key are required.", "error");
-      return;
-    }
+  const saveProject = async (payload) => {
+    const editing = modal?.project;
     try {
-      setSubmitting(true);
-      const payload = {
-        name: form.name.trim(),
-        key: form.key.trim().toUpperCase(),
-        ...(form.description.trim() ? { description: form.description.trim() } : {}),
-      };
-      const response = await fetchWithAuth(`${API_BASE_URL}/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const response = await fetchWithAuth(
+        editing ? `${API_BASE_URL}/projects/${editing.id}` : `${API_BASE_URL}/projects`,
+        {
+          method: editing ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
       if (!response.ok) {
-        if (response.status === 401) return;
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.detail || "Failed to create project.");
+        if (response.status === 401) return false;
+        throw new Error(
+          await readError(response, editing ? "Could not update the project." : "Could not create the project."),
+        );
       }
+      const saved = await response.json();
       await onProjectsChange();
-      setForm(INITIAL_PROJECT_FORM);
-      setShowCreate(false);
-      toast("Project created.");
+      setModal(null);
+      if (!editing) onSelectProject(saved.id);
+      toast(editing ? "Project updated." : `${saved.name} is ready.`);
+      return true;
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
-    } finally {
-      setSubmitting(false);
+      toast(err.message, "error");
+      return false;
     }
   };
 
-  const startEdit = (project, event) => {
-    event.stopPropagation();
-    setEditingId(project.id);
-    setEditForm({
-      name: project.name,
-      key: project.key,
-      description: project.description || "",
-    });
-  };
-
-  const handleEdit = async (e) => {
-    e.preventDefault();
-    if (!editForm.name.trim() || !editForm.key.trim()) {
-      toast("Name and key are required.", "error");
-      return;
-    }
-    try {
-      const response = await fetchWithAuth(`${API_BASE_URL}/projects/${editingId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: editForm.name.trim(),
-          key: editForm.key.trim().toUpperCase(),
-          description: editForm.description.trim() || null,
-        }),
-      });
-      if (!response.ok) {
-        if (response.status === 401) return;
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.detail || "Failed to update project.");
-      }
-      await onProjectsChange();
-      setEditingId(null);
-      toast("Project updated.");
-    } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
-    }
-  };
-
-  const handleDeleteProject = async (project, event) => {
-    event.stopPropagation();
-    if (!window.confirm(`Delete ${project.name}? This removes all related data.`)) return;
+  const deleteProject = async (project) => {
+    if (!window.confirm(`Delete ${project.name}? Its issues, comments, and files go with it.`)) return;
     try {
       const response = await fetchWithAuth(`${API_BASE_URL}/projects/${project.id}`, {
         method: "DELETE",
       });
       if (!response.ok) {
         if (response.status === 401) return;
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.detail || "Failed to delete project.");
+        throw new Error(await readError(response, "Could not delete the project."));
       }
       await onProjectsChange();
       if (selectedProjectId === project.id) onSelectProject(null);
       toast("Project deleted.");
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     }
   };
 
+  const navItem = (id, content, extra = null) => {
+    const active = selectedProjectId === id;
+    return (
+      <li key={id ?? "all"} className={`nav__row ${active ? "is-active" : ""}`}>
+        <button
+          type="button"
+          className="nav__item"
+          aria-current={active ? "page" : undefined}
+          onClick={() => onSelectProject(id)}
+        >
+          {active && (
+            <motion.span
+              layoutId="nav-active"
+              className="nav__pill"
+              transition={{ type: "spring", stiffness: 520, damping: 40 }}
+            />
+          )}
+          {content}
+        </button>
+        {extra}
+      </li>
+    );
+  };
+
   return (
-    <aside className="sidebar" aria-label="Projects">
-      <div className="sidebar__masthead">
-        <span className="sidebar__eyebrow">Workspace</span>
-        <span className="sidebar__title">
-          {projects.length} project{projects.length === 1 ? "" : "s"}
-        </span>
+    <nav className="sidebar" aria-label="Projects">
+      <div className="sidebar__brand">
+        <BrandMark size={26} />
+        <span>Mini Jira</span>
       </div>
 
-      <div className="sidebar__section">
-        <div className="sidebar__heading">
-          <span>Views</span>
-        </div>
-        <div className="sidebar__list">
-          <div
-            className={`sidebar__item ${selectedProjectId === null ? "sidebar__item--active" : ""}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => onSelectProject(null)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onSelectProject(null);
-              }
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M3 6h18" />
-              <path d="M3 12h18" />
-              <path d="M3 18h18" />
-            </svg>
-            <span className="sidebar__item-label">All issues</span>
-          </div>
-        </div>
-      </div>
+      <div className="sidebar__scroll">
+        <ul className="nav">
+          {navItem(
+            null,
+            <>
+              <span className="nav__icon">
+                <LayersIcon size={16} />
+              </span>
+              <span className="nav__label">All issues</span>
+            </>,
+          )}
+        </ul>
 
-      <div className="sidebar__section sidebar__section--fill">
         <div className="sidebar__heading">
           <span>Projects</span>
           <button
             type="button"
-            className="sidebar__heading-action"
+            className="icon-button icon-button--sm"
             aria-label="New project"
             title="New project"
-            onClick={() => setShowCreate((v) => !v)}
+            onClick={() => setModal({ project: null })}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
-            </svg>
+            <PlusIcon size={15} />
           </button>
         </div>
-        <div className="sidebar__list">
-          {projects.length === 0 && !showCreate && (
-            <div className="sidebar__empty">
-              No projects yet. Click + to create one.
-            </div>
-          )}
-          {projects.map((project) => {
-            const isOwner = project.owner_id === currentUserId;
-            const isEditing = editingId === project.id;
-            if (isEditing) {
-              return (
-                <form key={project.id} className="sidebar__form sidebar__form--padded" onSubmit={handleEdit}>
-                  <input
-                    className="input"
-                    placeholder="Name"
-                    value={editForm.name}
-                    onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))}
-                    required
-                  />
-                  <input
-                    className="input"
-                    placeholder="KEY"
-                    value={editForm.key}
-                    maxLength={10}
-                    onChange={(e) => setEditForm((p) => ({ ...p, key: e.target.value }))}
-                    required
-                  />
-                  <textarea
-                    className="textarea"
-                    placeholder="Description"
-                    rows={2}
-                    value={editForm.description}
-                    onChange={(e) => setEditForm((p) => ({ ...p, description: e.target.value }))}
-                  />
-                  <div className="sidebar__form-actions">
-                    <button type="submit" className="btn btn--primary btn--grow">
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => setEditingId(null)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              );
-            }
-            return (
-              <div
-                key={project.id}
-                className={`sidebar__item ${selectedProjectId === project.id ? "sidebar__item--active" : ""}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => onSelectProject(project.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onSelectProject(project.id);
-                  }
-                }}
-                title={project.description || project.name}
-              >
-                <span className="sidebar__item-key">{project.key}</span>
-                <span className="sidebar__item-label">{project.name}</span>
-                {isOwner && (
-                  <div className="sidebar__item-actions">
-                    <button
-                      type="button"
-                      className="sidebar__item-action"
-                      aria-label={`Edit ${project.name}`}
-                      onClick={(e) => startEdit(project, e)}
-                    >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      className="sidebar__item-action"
-                      aria-label={`Delete ${project.name}`}
-                      onClick={(e) => handleDeleteProject(project, e)}
-                    >
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 6h18" />
-                        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        <path d="m19 6-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
 
-        {showCreate && (
-          <form className="sidebar__form sidebar__form--padded" onSubmit={handleCreate}>
-            <input
-              className="input"
-              type="text"
-              placeholder="Project name"
-              value={form.name}
-              onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-              required
-              autoFocus
-            />
-            <input
-              className="input"
-              type="text"
-              placeholder="KEY (e.g. PROJ)"
-              value={form.key}
-              maxLength={10}
-              onChange={(e) => setForm((p) => ({ ...p, key: e.target.value }))}
-              required
-            />
-            <textarea
-              className="textarea"
-              rows={2}
-              placeholder="Description (optional)"
-              value={form.description}
-              onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-            />
-            <div className="sidebar__form-actions">
-              <button
-                type="submit"
-                className="btn btn--primary btn--grow"
-                disabled={submitting}
-              >
-                {submitting ? "Creating…" : "Create"}
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => {
-                  setShowCreate(false);
-                  setForm(INITIAL_PROJECT_FORM);
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
+        {projects.length === 0 ? (
+          <div className="sidebar__empty">
+            <p>Projects group issues and give them keys.</p>
+            <button type="button" className="btn btn--sm" onClick={() => setModal({ project: null })}>
+              <PlusIcon size={14} />
+              New project
+            </button>
+          </div>
+        ) : (
+          <ul className="nav">
+            {projects.map((project) =>
+              navItem(
+                project.id,
+                <>
+                  <ProjectMonogram project={project} size="sm" />
+                  <span className="nav__label" title={project.name}>
+                    {project.name}
+                  </span>
+                </>,
+                project.owner_id === currentUserId ? (
+                  <span className="nav__actions">
+                    <button
+                      type="button"
+                      className="icon-button icon-button--xs"
+                      aria-label={`Edit ${project.name}`}
+                      onClick={() => setModal({ project })}
+                    >
+                      <PencilIcon size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button icon-button--xs icon-button--danger"
+                      aria-label={`Delete ${project.name}`}
+                      onClick={() => void deleteProject(project)}
+                    >
+                      <TrashIcon size={13} />
+                    </button>
+                  </span>
+                ) : null,
+              ),
+            )}
+          </ul>
         )}
       </div>
-    </aside>
+
+      {footer && <div className="sidebar__footer">{footer}</div>}
+
+      <AnimatePresence>
+        {modal && (
+          <ProjectFormModal
+            key="project-form"
+            initial={
+              modal.project
+                ? {
+                    name: modal.project.name,
+                    key: modal.project.key,
+                    description: modal.project.description || "",
+                  }
+                : null
+            }
+            onSubmit={saveProject}
+            onClose={() => setModal(null)}
+          />
+        )}
+      </AnimatePresence>
+    </nav>
   );
 }

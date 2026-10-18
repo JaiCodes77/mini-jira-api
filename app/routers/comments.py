@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app import crud, models, serializers
 from app.auth import get_current_user
 from app.database import get_db
+from app.permissions import ensure_can_view_bug
 from app.schemas import CommentCreate, CommentResponse, CommentUpdate, PaginatedResponse
 
 router = APIRouter(prefix="/bugs/{bug_id}/comments", tags=["comments"])
@@ -38,6 +39,7 @@ def create_comment(
     current_user: models.User = Depends(get_current_user),
 ):
     bug = _get_bug_or_404(db, bug_id)
+    ensure_can_view_bug(db, current_user, bug)
     created = crud.create_comment(
         db=db,
         bug=bug,
@@ -53,8 +55,10 @@ def list_comments(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
-    _get_bug_or_404(db, bug_id)
+    bug = _get_bug_or_404(db, bug_id)
+    ensure_can_view_bug(db, current_user, bug)
     result = crud.get_comments(db=db, bug_id=bug_id, limit=limit, offset=offset)
     return PaginatedResponse(
         items=[serializers.serialize_comment(comment) for comment in result["items"]],
@@ -73,6 +77,7 @@ def update_comment(
     current_user: models.User = Depends(get_current_user),
 ):
     bug = _get_bug_or_404(db, bug_id)
+    ensure_can_view_bug(db, current_user, bug)
     comment = crud.get_comment(db=db, bug_id=bug_id, comment_id=comment_id)
     if comment is None:
         raise HTTPException(
@@ -98,6 +103,7 @@ def delete_comment(
     current_user: models.User = Depends(get_current_user),
 ):
     bug = _get_bug_or_404(db, bug_id)
+    ensure_can_view_bug(db, current_user, bug)
     comment = crud.get_comment(db=db, bug_id=bug_id, comment_id=comment_id)
     if comment is None:
         raise HTTPException(

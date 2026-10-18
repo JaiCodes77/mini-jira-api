@@ -1,17 +1,39 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "./apiConfig";
+import CommentThread from "./CommentThread";
+import { LabelPicker } from "./components/CreateIssueModal";
+import {
+  AlertIcon,
+  CloseIcon,
+  CopyIcon,
+  EyeIcon,
+  FileIcon,
+  LinkIcon,
+  PencilIcon,
+  PlusIcon,
+  TrashIcon,
+  UploadIcon,
+} from "./components/Icons";
+import { Avatar, PriorityIcon, StatusStepper, StatusTrack, TypeIcon } from "./components/IssueGlyphs";
 import {
   ISSUE_TYPE_OPTIONS,
   LINK_TYPE_OPTIONS,
   PRIORITY_OPTIONS,
-  STATUS_OPTIONS,
   formatDate,
+  formatRelative,
+  issueKey,
+  statusLabel,
   titleFromEnum,
-  userInitials,
 } from "./issueConstants";
-import { toast } from "./Toasts";
-import CommentThread from "./CommentThread";
 import MarkdownText from "./MarkdownText";
+import { ProjectMonogram } from "./ProjectSidebar";
+import { toast } from "./Toasts";
+
+const LINK_PHRASES = {
+  outgoing: { blocks: "Blocks", relates: "Relates to", duplicates: "Duplicates" },
+  incoming: { blocks: "Blocked by", relates: "Relates to", duplicates: "Duplicated by" },
+};
 
 const toDateTimeLocal = (value) => {
   if (!value) return "";
@@ -47,19 +69,67 @@ const isDirty = (draft, bug) => {
   const base = draftFromBug(bug);
   if (base.label_ids.length !== draft.label_ids.length) return true;
   if (base.label_ids.some((id) => !draft.label_ids.includes(id))) return true;
-  for (const key of Object.keys(base)) {
-    if (key === "label_ids") continue;
-    if ((base[key] ?? "") !== (draft[key] ?? "")) return true;
-  }
-  return false;
+  return Object.keys(base).some(
+    (key) => key !== "label_ids" && String(base[key] ?? "") !== String(draft[key] ?? ""),
+  );
 };
+
+const toId = (value) => (value === "" ? null : Number(value));
+
+async function readError(response, fallback) {
+  const body = await response.json().catch(() => null);
+  if (Array.isArray(body?.detail)) return body.detail.map((item) => item.msg).join(" ");
+  return typeof body?.detail === "string" ? body.detail : fallback;
+}
+
+function Prop({ label, children }) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+    </>
+  );
+}
+
+function SelectField({ label, value, onChange, children, disabled }) {
+  return (
+    <label className="field">
+      <span className="field__label">{label}</span>
+      <select className="select" value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled}>
+        {children}
+      </select>
+    </label>
+  );
+}
+
+function DetailSkeleton({ onClose }) {
+  return (
+    <div className="detail" aria-busy="true">
+      <header className="detail__bar">
+        <span className="shimmer" style={{ width: 96 }} />
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Close issue">
+          <CloseIcon size={17} />
+        </button>
+      </header>
+      <div className="detail__scroll">
+        <span className="shimmer shimmer--title" />
+        <span className="shimmer shimmer--title" style={{ width: "55%" }} />
+        <span className="shimmer shimmer--block" />
+        <span className="shimmer" style={{ width: "80%" }} />
+        <span className="shimmer" style={{ width: "64%" }} />
+      </div>
+    </div>
+  );
+}
 
 export default function IssueDetailPanel({
   bugId,
   fetchWithAuth,
   auth,
   projects,
+  syncToken,
   onClose,
+  onOpenIssue,
   onIssueUpdated,
 }) {
   const [bug, setBug] = useState(null);
@@ -68,152 +138,209 @@ export default function IssueDetailPanel({
   const [projectIssues, setProjectIssues] = useState([]);
   const [activity, setActivity] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [linkForm, setLinkForm] = useState({ target_bug_id: "", link_type: "relates" });
   const [uploading, setUploading] = useState(false);
-  const [showEditor, setShowEditor] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkForm, setLinkForm] = useState({ target_bug_id: "", link_type: "relates" });
+  const [tab, setTab] = useState("comments");
+  const [commentCount, setCommentCount] = useState(0);
+  const statusInFlight = useRef(false);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
 
-  const loadActivity = useCallback(async (currentBugId) => {
-    const response = await fetch(
-      `${API_BASE_URL}/bugs/${currentBugId}/activity?limit=50&offset=0`,
-    );
-    if (!response.ok) throw new Error("Failed to load activity.");
-    const data = await response.json();
-    setActivity(data.items);
+  const loadActivity = useCallback(
+    async (currentBugId) => {
+      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${currentBugId}/activity?limit=50&offset=0`);
+      if (response.ok) setActivity((await response.json()).items);
+    },
+    [fetchWithAuth],
+  );
+
+  const loadCatalog = useCallback(
+    async (projectId) => {
+      if (!projectId) {
+        setCatalog(null);
+        setProjectIssues([]);
+        return;
+      }
+      const [catalogResponse, bugsResponse] = await Promise.all([
+        fetchWithAuth(`${API_BASE_URL}/projects/${projectId}/catalog`),
+        fetchWithAuth(`${API_BASE_URL}/bugs?project_id=${projectId}&limit=100&offset=0&sort_by=backlog_rank&order=asc`),
+      ]);
+      if (catalogResponse.ok) setCatalog(await catalogResponse.json());
+      if (bugsResponse.ok) setProjectIssues((await bugsResponse.json()).items);
+    },
+    [fetchWithAuth],
+  );
+
+  const applyBug = useCallback((data) => {
+    setBug(data);
+    setDraft(draftFromBug(data));
   }, []);
 
-  const loadCatalog = useCallback(async (projectId) => {
-    if (!projectId) {
-      setCatalog(null);
-      setProjectIssues([]);
-      return;
-    }
-    const [catalogResponse, bugsResponse] = await Promise.all([
-      fetch(`${API_BASE_URL}/projects/${projectId}/catalog`),
-      fetch(
-        `${API_BASE_URL}/bugs?project_id=${projectId}&limit=100&offset=0&sort_by=backlog_rank&order=asc`,
-      ),
-    ]);
-    if (catalogResponse.ok) setCatalog(await catalogResponse.json());
-    if (bugsResponse.ok) {
-      const bugData = await bugsResponse.json();
-      setProjectIssues(bugData.items);
-    }
-  }, []);
-
-  const loadBug = useCallback(async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/bugs/${bugId}`);
-      if (!response.ok) throw new Error("Failed to load issue details.");
-      const data = await response.json();
-      setBug(data);
-      setDraft(draftFromBug(data));
-      await Promise.all([loadCatalog(data.project_id), loadActivity(data.id)]);
-    } catch (err) {
-      toast(err.message || "Could not load issue details.", "error");
-    } finally {
-      setLoading(false);
-    }
-  }, [bugId, loadActivity, loadCatalog]);
+  const loadBug = useCallback(
+    async ({ quiet = false } = {}) => {
+      try {
+        if (!quiet) setLoading(true);
+        setLoadError(null);
+        const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}`);
+        if (!response.ok) {
+          throw new Error(response.status === 404 ? "This issue no longer exists." : "Could not load this issue.");
+        }
+        const data = await response.json();
+        if (quiet && editingRef.current) {
+          setBug(data);
+        } else {
+          applyBug(data);
+        }
+        await Promise.all([quiet ? null : loadCatalog(data.project_id), loadActivity(data.id)]);
+      } catch (err) {
+        if (!quiet) {
+          setBug(null);
+          setDraft(null);
+          setLoadError(err.message);
+        }
+      } finally {
+        if (!quiet) setLoading(false);
+      }
+    },
+    [applyBug, bugId, fetchWithAuth, loadActivity, loadCatalog],
+  );
 
   useEffect(() => {
     void loadBug();
   }, [loadBug]);
 
+  const firstSync = useRef(true);
   useEffect(() => {
-    if (!draft) return;
-    void loadCatalog(draft.project_id || null);
-  }, [draft?.project_id, loadCatalog]);
+    if (firstSync.current) {
+      firstSync.current = false;
+      return;
+    }
+    void loadBug({ quiet: true });
+  }, [syncToken]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const draftProjectId = draft?.project_id;
+  useEffect(() => {
+    if (!editing || draftProjectId === undefined) return;
+    void loadCatalog(draftProjectId || null);
+  }, [draftProjectId, editing, loadCatalog]);
 
   const isWatching = useMemo(
     () => Boolean(bug?.watchers?.some((watcher) => watcher.id === auth?.user_id)),
     [auth?.user_id, bug?.watchers],
   );
-
   const dirty = useMemo(() => isDirty(draft, bug), [draft, bug]);
 
-  const handleDraftChange = (field, value) => {
-    setDraft((prev) => {
-      if (field === "project_id") {
-        return {
-          ...prev,
-          project_id: value,
-          epic_id: "",
-          sprint_id: "",
-          component_id: "",
-          fix_version_id: "",
-          affects_version_id: "",
-          parent_bug_id: "",
-          label_ids: [],
-        };
-      }
-      return { ...prev, [field]: value };
-    });
-  };
+  const refKey = (ref) =>
+    projectIssues.find((item) => item.id === ref.id)?.issue_key ||
+    (bug?.project && ref.project_id === bug.project_id ? `${bug.project.key}-${ref.id}` : `#${ref.id}`);
 
-  const handleLabelToggle = (labelId) => {
+  const setField = (field) => (value) =>
+    setDraft((prev) =>
+      field === "project_id"
+        ? {
+            ...prev,
+            project_id: value,
+            epic_id: "",
+            sprint_id: "",
+            component_id: "",
+            fix_version_id: "",
+            affects_version_id: "",
+            parent_bug_id: "",
+            assignee_id: "",
+            label_ids: [],
+          }
+        : { ...prev, [field]: value },
+    );
+
+  const toggleLabel = (labelId) =>
     setDraft((prev) => ({
       ...prev,
       label_ids: prev.label_ids.includes(labelId)
         ? prev.label_ids.filter((item) => item !== labelId)
         : [...prev.label_ids, labelId],
     }));
+
+  const patchBug = async (payload) => {
+    const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      if (response.status === 401) return null;
+      throw new Error(await readError(response, "Could not update the issue."));
+    }
+    return response.json();
+  };
+
+  const changeStatus = async (status) => {
+    if (!bug || statusInFlight.current) return;
+    statusInFlight.current = true;
+    const previous = bug;
+    setBug({ ...bug, status });
+    try {
+      const updated = await patchBug({ status });
+      if (!updated) return;
+      applyBug(updated);
+      onIssueUpdated(updated);
+      void loadActivity(updated.id);
+      toast(`Moved to ${statusLabel(status)}.`);
+    } catch (err) {
+      setBug(previous);
+      toast(err.message, "error");
+    } finally {
+      statusInFlight.current = false;
+    }
   };
 
   const handleSave = async () => {
     if (!draft?.title.trim()) {
-      toast("Title is required.", "error");
+      toast("The title cannot be empty.", "error");
       return;
     }
     try {
       setSaving(true);
-      const payload = {
+      const updated = await patchBug({
         title: draft.title.trim(),
         description: draft.description.trim() || null,
-        status: draft.status,
         priority: draft.priority,
         issue_type: draft.issue_type,
         story_points: draft.story_points === "" ? null : Number(draft.story_points),
-        project_id: draft.project_id === "" ? null : Number(draft.project_id),
-        epic_id: draft.epic_id === "" ? null : Number(draft.epic_id),
-        sprint_id: draft.sprint_id === "" ? null : Number(draft.sprint_id),
-        component_id: draft.component_id === "" ? null : Number(draft.component_id),
-        fix_version_id: draft.fix_version_id === "" ? null : Number(draft.fix_version_id),
-        affects_version_id:
-          draft.affects_version_id === "" ? null : Number(draft.affects_version_id),
-        parent_bug_id: draft.parent_bug_id === "" ? null : Number(draft.parent_bug_id),
-        assignee_id: draft.assignee_id === "" ? null : Number(draft.assignee_id),
+        project_id: toId(draft.project_id),
+        epic_id: toId(draft.epic_id),
+        sprint_id: toId(draft.sprint_id),
+        component_id: toId(draft.component_id),
+        fix_version_id: toId(draft.fix_version_id),
+        affects_version_id: toId(draft.affects_version_id),
+        parent_bug_id: toId(draft.parent_bug_id),
+        assignee_id: toId(draft.assignee_id),
         due_at: draft.due_at || null,
         reminder_at: draft.reminder_at || null,
         label_ids: draft.label_ids,
-      };
-
-      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
       });
-      if (!response.ok) {
-        if (response.status === 401) return;
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.detail || "Failed to update issue.");
-      }
-      const updated = await response.json();
-      setBug(updated);
-      setDraft(draftFromBug(updated));
+      if (!updated) return;
+      applyBug(updated);
+      setEditing(false);
       await Promise.all([loadCatalog(updated.project_id), loadActivity(updated.id)]);
       onIssueUpdated(updated);
-      toast("Issue updated.");
+      toast("Changes saved.");
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     } finally {
       setSaving(false);
     }
   };
 
-  const resetDraft = () => {
-    if (bug) setDraft(draftFromBug(bug));
+  const cancelEdit = () => {
+    if (bug) {
+      setDraft(draftFromBug(bug));
+      if (draft?.project_id !== (bug.project_id ?? "")) void loadCatalog(bug.project_id);
+    }
+    setEditing(false);
   };
 
   const toggleWatch = async () => {
@@ -223,18 +350,28 @@ export default function IssueDetailPanel({
       });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error(`Failed to ${isWatching ? "unwatch" : "watch"} issue.`);
+        throw new Error("Could not change watching.");
       }
       const updated = await response.json();
       setBug(updated);
       onIssueUpdated(updated);
-      toast(isWatching ? "Stopped watching." : "Watching issue.");
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     }
   };
 
-  const handleAddLink = async () => {
+  const copyLink = async () => {
+    const url = `${window.location.origin}/dashboard/bugs/${bug.id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast(`Copied a link to ${bug.issue_key}.`);
+    } catch {
+      toast("Copy failed. Your browser blocked clipboard access.", "error");
+    }
+  };
+
+  const addLink = async (event) => {
+    event.preventDefault();
     if (!linkForm.target_bug_id) return;
     try {
       const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/links`, {
@@ -247,34 +384,30 @@ export default function IssueDetailPanel({
       });
       if (!response.ok) {
         if (response.status === 401) return;
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.detail || "Failed to link issue.");
+        throw new Error(await readError(response, "Could not link those issues."));
       }
       setLinkForm({ target_bug_id: "", link_type: "relates" });
-      await loadBug();
-      toast("Link added.");
+      setLinkOpen(false);
+      await loadBug({ quiet: true });
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     }
   };
 
-  const handleDeleteLink = async (linkId) => {
+  const removeLink = async (linkId) => {
     try {
-      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/links/${linkId}`, {
-        method: "DELETE",
-      });
+      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/links/${linkId}`, { method: "DELETE" });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error("Failed to remove issue link.");
+        throw new Error("Could not remove the link.");
       }
-      await loadBug();
-      toast("Link removed.");
+      await loadBug({ quiet: true });
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     }
   };
 
-  const handleUploadAttachment = async (event) => {
+  const upload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
@@ -287,594 +420,473 @@ export default function IssueDetailPanel({
       });
       if (!response.ok) {
         if (response.status === 401) return;
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.detail || "Failed to upload attachment.");
+        throw new Error(await readError(response, "Could not upload that file."));
       }
-      event.target.value = "";
-      await loadBug();
-      toast("Attachment uploaded.");
+      await loadBug({ quiet: true });
+      toast(`${file.name} attached.`);
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     } finally {
+      event.target.value = "";
       setUploading(false);
     }
   };
 
-  const handleDeleteAttachment = async (attachmentId) => {
-    if (!window.confirm("Delete this attachment?")) return;
+  const removeAttachment = async (attachment) => {
+    if (!window.confirm(`Delete ${attachment.original_name}?`)) return;
     try {
-      const response = await fetchWithAuth(
-        `${API_BASE_URL}/bugs/${bugId}/attachments/${attachmentId}`,
-        { method: "DELETE" },
-      );
+      const response = await fetchWithAuth(`${API_BASE_URL}/bugs/${bugId}/attachments/${attachment.id}`, {
+        method: "DELETE",
+      });
       if (!response.ok) {
         if (response.status === 401) return;
-        throw new Error("Failed to delete attachment.");
+        throw new Error("Could not delete the attachment.");
       }
-      await loadBug();
-      toast("Attachment deleted.");
+      await loadBug({ quiet: true });
     } catch (err) {
-      toast(err.message || "Something went wrong.", "error");
+      toast(err.message, "error");
     }
   };
 
-  if (loading || !bug || !draft) {
+  const download = async (attachment) => {
+    const response = await fetchWithAuth(`${API_BASE_URL}${attachment.download_url}`);
+    if (!response.ok) {
+      toast("Could not download that file.", "error");
+      return;
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = attachment.original_name;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (loadError && !bug) {
     return (
-      <aside className="detail-panel" aria-busy="true">
-        <div className="detail-panel__header">
-          <div className="detail-panel__title">
-            <span className="detail-panel__eyebrow">Loading…</span>
-            <span className="detail-panel__name">Loading issue</span>
-          </div>
-          <div className="detail-panel__actions">
-            <button type="button" className="btn btn--ghost btn--icon" onClick={onClose} aria-label="Close">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 6L6 18" />
-                <path d="M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-        <div className="detail-panel__body">
-          <div className="skeleton-bar" style={{ width: "80%", height: "16px" }} />
-          <div className="skeleton-bar" style={{ height: "12px" }} />
-          <div className="skeleton-bar" style={{ width: "60%", height: "12px" }} />
-        </div>
-      </aside>
-    );
-  }
-
-  const projectKey = bug.project?.key || "ISSUE";
-
-  return (
-    <aside className="detail-panel">
-      <div className="detail-panel__header">
-        <div className="detail-panel__title">
-          <span className="detail-panel__eyebrow">
-            {projectKey}-{bug.id} · {titleFromEnum(bug.issue_type)}
-          </span>
-          <span className="detail-panel__name">{bug.title}</span>
-        </div>
-        <div className="detail-panel__actions">
-          <button type="button" className="btn" onClick={() => void toggleWatch()}>
-            {isWatching ? "Unwatch" : "Watch"}
-            {bug.watch_count > 0 && (
-              <span style={{ color: "var(--fg-subtle)" }}> · {bug.watch_count}</span>
-            )}
+      <div className="detail">
+        <header className="detail__bar">
+          <span className="detail__crumb">Issue</span>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close issue">
+            <CloseIcon size={17} />
           </button>
-          <button
-            type="button"
-            className="btn btn--ghost btn--icon"
-            onClick={onClose}
-            aria-label="Close panel"
-            title="Close"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 6L6 18" />
-              <path d="M6 6l12 12" />
-            </svg>
+        </header>
+        <div className="detail__scroll detail__scroll--center">
+          <span className="empty__icon">
+            <AlertIcon size={20} />
+          </span>
+          <p className="detail__error">{loadError}</p>
+          <button type="button" className="btn" onClick={() => void loadBug()}>
+            Try again
           </button>
         </div>
       </div>
+    );
+  }
 
-      <div className="detail-panel__body">
-        {/* Summary + Fields */}
-        <section className="detail-section">
-          <div className="detail-section__header">
-            <div className="detail-section__title">Details</div>
-            <div style={{ display: "flex", gap: "6px" }}>
-              {showEditor ? (
-                <>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => {
-                      resetDraft();
-                      setShowEditor(false);
-                    }}
-                    disabled={saving}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    onClick={() => void handleSave()}
-                    disabled={saving || !dirty}
-                  >
-                    {saving ? (
-                      <>
-                        <span className="spinner" aria-hidden />
-                        Saving…
-                      </>
-                    ) : (
-                      "Save changes"
-                    )}
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => setShowEditor(true)}
-                >
-                  Edit
-                </button>
-              )}
-            </div>
+  if (loading || !bug || !draft) return <DetailSkeleton onClose={onClose} />;
+
+  const linkCandidates = projectIssues.filter(
+    (item) => item.id !== bug.id && !bug.links.some((link) => link.bug.id === item.id),
+  );
+
+  return (
+    <div className="detail">
+      <header className="detail__bar">
+        <div className="detail__crumbs">
+          {bug.project && (
+            <span className="detail__crumb">
+              <ProjectMonogram project={bug.project} size="xs" />
+              <span className="detail__crumb-name">{bug.project.name}</span>
+            </span>
+          )}
+          <button type="button" className="detail__key" onClick={() => void copyLink()} title="Copy link">
+            <TypeIcon type={bug.issue_type} size={14} />
+            {issueKey(bug)}
+            <CopyIcon size={13} className="detail__key-copy" />
+          </button>
+        </div>
+        <div className="detail__tools">
+          <button
+            type="button"
+            className={`btn btn--sm watch ${isWatching ? "is-on" : ""}`}
+            aria-pressed={isWatching}
+            onClick={() => void toggleWatch()}
+          >
+            <EyeIcon size={15} />
+            {isWatching ? "Watching" : "Watch"}
+            {bug.watch_count > 0 && <span className="watch__count">{bug.watch_count}</span>}
+          </button>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close issue" title="Close (Esc)">
+            <CloseIcon size={17} />
+          </button>
+        </div>
+      </header>
+
+      <div className="detail__scroll">
+        {editing ? (
+          <textarea
+            className="detail__title-input"
+            aria-label="Title"
+            rows={2}
+            value={draft.title}
+            maxLength={255}
+            onChange={(event) => setField("title")(event.target.value)}
+          />
+        ) : (
+          <h2 className="detail__title">{bug.title}</h2>
+        )}
+
+        <StatusStepper status={bug.status} onChange={changeStatus} disabled={editing} />
+
+        <section className="detail__section">
+          <div className="section-head">
+            <h3>Details</h3>
+            {!editing && (
+              <button type="button" className="btn btn--ghost btn--sm" onClick={() => setEditing(true)}>
+                <PencilIcon size={14} />
+                Edit
+              </button>
+            )}
           </div>
 
-          {showEditor ? (
-            <div className="fields-grid">
-              <label className="field field--full">
-                <span className="field__label">Title</span>
-                <input
-                  className="input"
-                  value={draft.title}
-                  onChange={(e) => handleDraftChange("title", e.target.value)}
-                />
-              </label>
-              <label className="field field--full">
-                <span className="field__label">Description (Markdown)</span>
-                <textarea
-                  className="textarea"
-                  rows={6}
-                  value={draft.description}
-                  onChange={(e) => handleDraftChange("description", e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span className="field__label">Project</span>
-                <select
-                  className="select"
-                  value={draft.project_id}
-                  onChange={(e) => handleDraftChange("project_id", e.target.value)}
-                >
-                  <option value="">None</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.key} — {project.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Type</span>
-                <select
-                  className="select"
-                  value={draft.issue_type}
-                  onChange={(e) => handleDraftChange("issue_type", e.target.value)}
-                >
-                  {ISSUE_TYPE_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {titleFromEnum(option)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Status</span>
-                <select
-                  className="select"
-                  value={draft.status}
-                  onChange={(e) => handleDraftChange("status", e.target.value)}
-                >
-                  {STATUS_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {titleFromEnum(option)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Priority</span>
-                <select
-                  className="select"
-                  value={draft.priority}
-                  onChange={(e) => handleDraftChange("priority", e.target.value)}
-                >
-                  {PRIORITY_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {titleFromEnum(option)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+          {editing ? (
+            <div className="edit-grid">
+              <SelectField label="Type" value={draft.issue_type} onChange={setField("issue_type")}>
+                {ISSUE_TYPE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {titleFromEnum(option)}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Priority" value={draft.priority} onChange={setField("priority")}>
+                {PRIORITY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {titleFromEnum(option)}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Assignee" value={draft.assignee_id} onChange={setField("assignee_id")} disabled={!catalog}>
+                <option value="">Unassigned</option>
+                {catalog?.users?.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.username}
+                  </option>
+                ))}
+              </SelectField>
               <label className="field">
                 <span className="field__label">Story points</span>
                 <input
                   className="input"
                   type="number"
                   min="0"
+                  max="100"
                   value={draft.story_points}
-                  onChange={(e) => handleDraftChange("story_points", e.target.value)}
+                  onChange={(event) => setField("story_points")(event.target.value)}
                 />
               </label>
-              <label className="field">
-                <span className="field__label">Assignee</span>
-                <select
-                  className="select"
-                  value={draft.assignee_id}
-                  onChange={(e) => handleDraftChange("assignee_id", e.target.value)}
-                >
-                  <option value="">Unassigned</option>
-                  {catalog?.users?.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.username}
+              <SelectField label="Project" value={draft.project_id} onChange={setField("project_id")}>
+                <option value="">No project</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name} ({project.key})
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Parent issue" value={draft.parent_bug_id} onChange={setField("parent_bug_id")} disabled={!catalog}>
+                <option value="">None</option>
+                {projectIssues
+                  .filter((item) => item.id !== bug.id)
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.issue_key} {item.title}
                     </option>
                   ))}
-                </select>
-              </label>
+              </SelectField>
+              <SelectField label="Epic" value={draft.epic_id} onChange={setField("epic_id")} disabled={!catalog}>
+                <option value="">None</option>
+                {catalog?.epics?.map((epic) => (
+                  <option key={epic.id} value={epic.id}>
+                    {epic.name}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Sprint" value={draft.sprint_id} onChange={setField("sprint_id")} disabled={!catalog}>
+                <option value="">None</option>
+                {catalog?.sprints?.map((sprint) => (
+                  <option key={sprint.id} value={sprint.id}>
+                    {sprint.name}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Component" value={draft.component_id} onChange={setField("component_id")} disabled={!catalog}>
+                <option value="">None</option>
+                {catalog?.components?.map((component) => (
+                  <option key={component.id} value={component.id}>
+                    {component.name}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField label="Fix version" value={draft.fix_version_id} onChange={setField("fix_version_id")} disabled={!catalog}>
+                <option value="">None</option>
+                {catalog?.versions?.map((version) => (
+                  <option key={version.id} value={version.id}>
+                    {version.name}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField
+                label="Affects version"
+                value={draft.affects_version_id}
+                onChange={setField("affects_version_id")}
+                disabled={!catalog}
+              >
+                <option value="">None</option>
+                {catalog?.versions?.map((version) => (
+                  <option key={version.id} value={version.id}>
+                    {version.name}
+                  </option>
+                ))}
+              </SelectField>
               <label className="field">
-                <span className="field__label">Reporter</span>
-                <input
-                  className="input"
-                  value={bug.reporter?.username || "Unknown"}
-                  disabled
-                />
-              </label>
-              <label className="field">
-                <span className="field__label">Epic</span>
-                <select
-                  className="select"
-                  value={draft.epic_id}
-                  onChange={(e) => handleDraftChange("epic_id", e.target.value)}
-                >
-                  <option value="">None</option>
-                  {catalog?.epics?.map((epic) => (
-                    <option key={epic.id} value={epic.id}>
-                      {epic.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Sprint</span>
-                <select
-                  className="select"
-                  value={draft.sprint_id}
-                  onChange={(e) => handleDraftChange("sprint_id", e.target.value)}
-                >
-                  <option value="">None</option>
-                  {catalog?.sprints?.map((sprint) => (
-                    <option key={sprint.id} value={sprint.id}>
-                      {sprint.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Component</span>
-                <select
-                  className="select"
-                  value={draft.component_id}
-                  onChange={(e) => handleDraftChange("component_id", e.target.value)}
-                >
-                  <option value="">None</option>
-                  {catalog?.components?.map((component) => (
-                    <option key={component.id} value={component.id}>
-                      {component.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Fix version</span>
-                <select
-                  className="select"
-                  value={draft.fix_version_id}
-                  onChange={(e) => handleDraftChange("fix_version_id", e.target.value)}
-                >
-                  <option value="">None</option>
-                  {catalog?.versions?.map((version) => (
-                    <option key={version.id} value={version.id}>
-                      {version.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Affects version</span>
-                <select
-                  className="select"
-                  value={draft.affects_version_id}
-                  onChange={(e) => handleDraftChange("affects_version_id", e.target.value)}
-                >
-                  <option value="">None</option>
-                  {catalog?.versions?.map((version) => (
-                    <option key={version.id} value={version.id}>
-                      {version.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Parent issue</span>
-                <select
-                  className="select"
-                  value={draft.parent_bug_id}
-                  onChange={(e) => handleDraftChange("parent_bug_id", e.target.value)}
-                >
-                  <option value="">None</option>
-                  {projectIssues
-                    .filter((item) => item.id !== bug.id)
-                    .map((item) => (
-                      <option key={item.id} value={item.id}>
-                        #{item.id} — {item.title}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Due at</span>
+                <span className="field__label">Due</span>
                 <input
                   className="input"
                   type="datetime-local"
                   value={draft.due_at}
-                  onChange={(e) => handleDraftChange("due_at", e.target.value)}
+                  onChange={(event) => setField("due_at")(event.target.value)}
                 />
               </label>
               <label className="field">
-                <span className="field__label">Reminder at</span>
+                <span className="field__label">Reminder</span>
                 <input
                   className="input"
                   type="datetime-local"
                   value={draft.reminder_at}
-                  onChange={(e) => handleDraftChange("reminder_at", e.target.value)}
+                  onChange={(event) => setField("reminder_at")(event.target.value)}
                 />
               </label>
-              {catalog?.labels && catalog.labels.length > 0 && (
-                <div className="field field--full">
+              {catalog?.labels?.length > 0 && (
+                <div className="field edit-grid__full">
                   <span className="field__label">Labels</span>
-                  <div className="label-picker">
-                    {catalog.labels.map((label) => {
-                      const active = draft.label_ids.includes(label.id);
-                      return (
-                        <label
-                          key={label.id}
-                          className={`label-chip ${active ? "label-chip--active" : ""}`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={active}
-                            onChange={() => handleLabelToggle(label.id)}
-                          />
-                          <span className="label-chip__dot" style={{ background: label.color }} />
-                          <span>{label.name}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
+                  <LabelPicker labels={catalog.labels} selected={draft.label_ids} onToggle={toggleLabel} />
                 </div>
               )}
             </div>
           ) : (
-            <dl className="kv">
-              <div className="kv__key">Status</div>
-              <div className="kv__val">
-                <span className={`tag tag--status-${bug.status}`}>
-                  <span className="tag__dot" />
-                  {titleFromEnum(bug.status)}
-                </span>
-              </div>
-              <div className="kv__key">Priority</div>
-              <div className="kv__val">
-                <span className={`tag tag--priority-${bug.priority}`}>
+            <dl className="props">
+              <Prop label="Priority">
+                <span className="props__inline">
+                  <PriorityIcon priority={bug.priority} />
                   {titleFromEnum(bug.priority)}
                 </span>
-              </div>
-              <div className="kv__key">Assignee</div>
-              <div className="kv__val">
+              </Prop>
+              <Prop label="Assignee">
                 {bug.assignee ? (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                    <span className="avatar" aria-hidden>{userInitials(bug.assignee.username)}</span>
+                  <span className="props__inline">
+                    <Avatar name={bug.assignee.username} size="sm" />
                     {bug.assignee.username}
                   </span>
                 ) : (
-                  <span className="kv__val--muted">Unassigned</span>
+                  <span className="props__muted">Unassigned</span>
                 )}
-              </div>
-              <div className="kv__key">Reporter</div>
-              <div className="kv__val">
-                {bug.reporter?.username || <span className="kv__val--muted">Unknown</span>}
-              </div>
-              <div className="kv__key">Project</div>
-              <div className="kv__val">
-                {bug.project ? (
-                  <>
-                    <span className="tag">{bug.project.key}</span> {bug.project.name}
-                  </>
+              </Prop>
+              <Prop label="Reporter">
+                {bug.reporter ? (
+                  <span className="props__inline">
+                    <Avatar name={bug.reporter.username} size="sm" />
+                    {bug.reporter.username}
+                  </span>
                 ) : (
-                  <span className="kv__val--muted">None</span>
+                  <span className="props__muted">Unknown</span>
                 )}
-              </div>
-              <div className="kv__key">Epic</div>
-              <div className="kv__val">
-                {bug.epic?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Sprint</div>
-              <div className="kv__val">
-                {bug.sprint?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Component</div>
-              <div className="kv__val">
-                {bug.component?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Fix version</div>
-              <div className="kv__val">
-                {bug.fix_version?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Affects version</div>
-              <div className="kv__val">
-                {bug.affects_version?.name || <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Story points</div>
-              <div className="kv__val">
-                {bug.story_points != null ? bug.story_points : <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Due</div>
-              <div className="kv__val">
-                {bug.due_at ? formatDate(bug.due_at) : <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Reminder</div>
-              <div className="kv__val">
-                {bug.reminder_at ? formatDate(bug.reminder_at) : <span className="kv__val--muted">—</span>}
-              </div>
-              <div className="kv__key">Labels</div>
-              <div className="kv__val">
-                {bug.labels && bug.labels.length > 0 ? (
-                  <div className="label-picker">
+              </Prop>
+              <Prop label="Type">
+                <span className="props__inline">
+                  <TypeIcon type={bug.issue_type} size={14} />
+                  {titleFromEnum(bug.issue_type)}
+                </span>
+              </Prop>
+              {bug.story_points != null && <Prop label="Points">{bug.story_points}</Prop>}
+              {bug.parent && (
+                <Prop label="Parent">
+                  <button type="button" className="ref-link" onClick={() => onOpenIssue(bug.parent.id)}>
+                    <span className="ref-link__key">{refKey(bug.parent)}</span>
+                    {bug.parent.title}
+                  </button>
+                </Prop>
+              )}
+              {bug.epic && <Prop label="Epic">{bug.epic.name}</Prop>}
+              {bug.sprint && <Prop label="Sprint">{bug.sprint.name}</Prop>}
+              {bug.component && <Prop label="Component">{bug.component.name}</Prop>}
+              {bug.fix_version && <Prop label="Fix version">{bug.fix_version.name}</Prop>}
+              {bug.affects_version && <Prop label="Affects">{bug.affects_version.name}</Prop>}
+              {bug.due_at && <Prop label="Due">{formatDate(bug.due_at)}</Prop>}
+              {bug.reminder_at && <Prop label="Reminder">{formatDate(bug.reminder_at)}</Prop>}
+              {bug.labels?.length > 0 && (
+                <Prop label="Labels">
+                  <span className="props__labels">
                     {bug.labels.map((label) => (
-                      <span key={label.id} className="label-chip">
-                        <span className="label-chip__dot" style={{ background: label.color }} />
+                      <span key={label.id} className="label-tag" style={{ "--label-color": label.color }}>
                         {label.name}
                       </span>
                     ))}
-                  </div>
-                ) : (
-                  <span className="kv__val--muted">None</span>
-                )}
-              </div>
-              <div className="kv__key">Created</div>
-              <div className="kv__val kv__val--muted">{formatDate(bug.created_at)}</div>
-              <div className="kv__key">Updated</div>
-              <div className="kv__val kv__val--muted">{formatDate(bug.updated_at)}</div>
+                  </span>
+                </Prop>
+              )}
+              {bug.watchers.length > 0 && (
+                <Prop label="Watchers">
+                  <span className="avatar-stack">
+                    {bug.watchers.slice(0, 5).map((watcher) => (
+                      <Avatar key={watcher.id} name={watcher.username} size="sm" label={watcher.username} />
+                    ))}
+                  </span>
+                </Prop>
+              )}
+              <Prop label="Created">
+                <span className="props__muted" title={formatDate(bug.created_at)}>
+                  {formatRelative(bug.created_at)}
+                </span>
+              </Prop>
+              <Prop label="Updated">
+                <span className="props__muted" title={formatDate(bug.updated_at)}>
+                  {formatRelative(bug.updated_at)}
+                </span>
+              </Prop>
             </dl>
           )}
         </section>
 
-        {/* Description */}
-        <section className="detail-section">
-          <div className="detail-section__header">
-            <div className="detail-section__title">Description</div>
+        <section className="detail__section">
+          <div className="section-head">
+            <h3>Description</h3>
           </div>
-          <MarkdownText
-            value={bug.description}
-            emptyText="No description. Click Edit to add one."
-          />
-        </section>
-
-        {/* Watchers & subtasks */}
-        <section className="detail-section">
-          <div className="detail-section__header">
-            <div className="detail-section__title">People & hierarchy</div>
-          </div>
-          <div className="fields-grid">
-            <div>
-              <div className="field__label" style={{ marginBottom: "6px" }}>
-                Watchers ({bug.watchers.length})
-              </div>
-              {bug.watchers.length === 0 ? (
-                <div className="detail-section__empty">No watchers.</div>
-              ) : (
-                <ul className="mini-list">
-                  {bug.watchers.map((watcher) => (
-                    <li key={watcher.id}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                        <span className="avatar" aria-hidden>{userInitials(watcher.username)}</span>
-                        {watcher.username}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div>
-              <div className="field__label" style={{ marginBottom: "6px" }}>
-                Subtasks ({bug.subtasks.length})
-              </div>
-              {bug.subtasks.length === 0 ? (
-                <div className="detail-section__empty">No subtasks.</div>
-              ) : (
-                <ul className="mini-list">
-                  {bug.subtasks.map((item) => (
-                    <li key={item.id}>
-                      <span>#{item.id} — {item.title}</span>
-                      <span className="mini-list__sub">{titleFromEnum(item.status)}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </section>
-
-        {/* Links */}
-        <section className="detail-section">
-          <div className="detail-section__header">
-            <div className="detail-section__title">Linked issues</div>
-            <div className="detail-section__count">{bug.links.length}</div>
-          </div>
-          <div className="inline-row" style={{ marginBottom: "10px", gap: "6px" }}>
-            <input
-              className="input"
-              type="number"
-              placeholder="Issue id"
-              value={linkForm.target_bug_id}
-              onChange={(e) => setLinkForm((prev) => ({ ...prev, target_bug_id: e.target.value }))}
-              style={{ width: "110px" }}
+          {editing ? (
+            <textarea
+              className="textarea"
+              rows={7}
+              aria-label="Description"
+              placeholder="Add context, steps to reproduce, or acceptance criteria. Markdown works."
+              value={draft.description}
+              onChange={(event) => setField("description")(event.target.value)}
             />
-            <select
-              className="select"
-              value={linkForm.link_type}
-              onChange={(e) => setLinkForm((prev) => ({ ...prev, link_type: e.target.value }))}
-              style={{ width: "130px" }}
-            >
-              {LINK_TYPE_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {titleFromEnum(option)}
-                </option>
+          ) : (
+            <MarkdownText value={bug.description} emptyText="No description yet." />
+          )}
+        </section>
+
+        {bug.subtasks.length > 0 && (
+          <section className="detail__section">
+            <div className="section-head">
+              <h3>Subtasks</h3>
+              <span className="section-head__count">
+                {bug.subtasks.filter((item) => item.status === "closed").length}/{bug.subtasks.length}
+              </span>
+            </div>
+            <ul className="ref-list">
+              {bug.subtasks.map((item) => (
+                <li key={item.id}>
+                  <button type="button" className="ref-row" onClick={() => onOpenIssue(item.id)}>
+                    <span className="ref-row__key">{refKey(item)}</span>
+                    <span className="ref-row__title">{item.title}</span>
+                    <StatusTrack status={item.status} showLabel={false} />
+                  </button>
+                </li>
               ))}
-            </select>
-            <button type="button" className="btn" onClick={() => void handleAddLink()}>
+            </ul>
+          </section>
+        )}
+
+        <section className="detail__section">
+          <div className="section-head">
+            <h3>Linked issues</h3>
+            {bug.links.length > 0 && <span className="section-head__count">{bug.links.length}</span>}
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm section-head__action"
+              aria-expanded={linkOpen}
+              onClick={() => setLinkOpen((value) => !value)}
+            >
+              <LinkIcon size={14} />
               Link
             </button>
           </div>
+          <AnimatePresence initial={false}>
+            {linkOpen && (
+              <motion.form
+                key="link-form"
+                className="link-form"
+                onSubmit={addLink}
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.18 }}
+              >
+                <div className="link-form__inner">
+                  <select
+                    className="select"
+                    aria-label="Link type"
+                    value={linkForm.link_type}
+                    onChange={(event) => setLinkForm((prev) => ({ ...prev, link_type: event.target.value }))}
+                  >
+                    {LINK_TYPE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {LINK_PHRASES.outgoing[option]}
+                      </option>
+                    ))}
+                  </select>
+                  {linkCandidates.length > 0 ? (
+                    <select
+                      className="select"
+                      aria-label="Issue to link"
+                      value={linkForm.target_bug_id}
+                      onChange={(event) => setLinkForm((prev) => ({ ...prev, target_bug_id: event.target.value }))}
+                    >
+                      <option value="">Choose an issue</option>
+                      {linkCandidates.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.issue_key} {item.title}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className="input"
+                      type="number"
+                      min="1"
+                      aria-label="Issue number"
+                      placeholder="Issue number"
+                      value={linkForm.target_bug_id}
+                      onChange={(event) => setLinkForm((prev) => ({ ...prev, target_bug_id: event.target.value }))}
+                    />
+                  )}
+                  <button type="submit" className="btn btn--primary" disabled={!linkForm.target_bug_id}>
+                    Add
+                  </button>
+                </div>
+              </motion.form>
+            )}
+          </AnimatePresence>
           {bug.links.length === 0 ? (
-            <div className="detail-section__empty">No links.</div>
+            !linkOpen && <p className="section-empty">Nothing linked. Use Link to connect blockers or duplicates.</p>
           ) : (
-            <ul className="mini-list">
+            <ul className="ref-list">
               {bug.links.map((link) => (
-                <li key={link.id}>
-                  <span>
-                    <strong style={{ fontWeight: 500 }}>{titleFromEnum(link.link_type)}</strong>
-                    <span style={{ color: "var(--fg-subtle)" }}>
-                      {" "}
-                      {link.direction === "outgoing" ? "→" : "←"} #{link.bug.id}{" "}
-                    </span>
-                    {link.bug.title}
-                  </span>
+                <li key={link.id} className="ref-list__item">
+                  <button type="button" className="ref-row" onClick={() => onOpenIssue(link.bug.id)}>
+                    <span className="ref-row__relation">{LINK_PHRASES[link.direction]?.[link.link_type]}</span>
+                    <span className="ref-row__key">{refKey(link.bug)}</span>
+                    <span className="ref-row__title">{link.bug.title}</span>
+                    <StatusTrack status={link.bug.status} showLabel={false} />
+                  </button>
                   {link.direction === "outgoing" && (
                     <button
                       type="button"
-                      className="btn btn--ghost btn--icon"
+                      className="icon-button icon-button--xs icon-button--danger ref-list__remove"
                       aria-label="Remove link"
-                      onClick={() => void handleDeleteLink(link.id)}
+                      onClick={() => void removeLink(link.id)}
                     >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18 6L6 18" />
-                        <path d="M6 6l12 12" />
-                      </svg>
+                      <CloseIcon size={13} />
                     </button>
                   )}
                 </li>
@@ -883,104 +895,121 @@ export default function IssueDetailPanel({
           )}
         </section>
 
-        {/* Attachments */}
-        <section className="detail-section">
-          <div className="detail-section__header">
-            <div className="detail-section__title">Attachments</div>
-            <div className="detail-section__count">{bug.attachments.length}</div>
+        <section className="detail__section">
+          <div className="section-head">
+            <h3>Attachments</h3>
+            {bug.attachments.length > 0 && <span className="section-head__count">{bug.attachments.length}</span>}
           </div>
-          <label className="file-drop">
-            <input type="file" onChange={(e) => void handleUploadAttachment(e)} disabled={uploading} />
-            <div>
-              {uploading ? (
-                <>
-                  <span className="spinner" aria-hidden /> Uploading…
-                </>
-              ) : (
-                <>
-                  <strong>Upload a file</strong> · drag & drop or click to select
-                </>
-              )}
-            </div>
-          </label>
-          {bug.attachments.length === 0 ? (
-            <div className="detail-section__empty">No attachments.</div>
-          ) : (
-            <ul className="attach-list">
+          {bug.attachments.length > 0 && (
+            <ul className="files">
               {bug.attachments.map((attachment) => (
-                <li key={attachment.id} className="attach-item">
-                  <span className="attach-item__icon" aria-hidden>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 12.79V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6.21" />
-                      <path d="M15 3h6v6" />
-                      <path d="M10 14 21 3" />
-                    </svg>
+                <li key={attachment.id} className="file">
+                  <span className="file__icon">
+                    <FileIcon size={16} />
                   </span>
-                  <div className="attach-item__info">
-                    <a
-                      className="attach-item__name"
-                      href={`${API_BASE_URL}${attachment.download_url}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {attachment.original_name}
-                    </a>
-                    <span className="attach-item__size">
-                      {Math.max(1, Math.round(attachment.size_bytes / 1024))} KB
-                      {attachment.uploaded_by && ` · ${attachment.uploaded_by.username}`}
-                    </span>
-                  </div>
+                  <button type="button" className="file__name" onClick={() => void download(attachment)}>
+                    {attachment.original_name}
+                  </button>
+                  <span className="file__meta">
+                    {Math.max(1, Math.round(attachment.size_bytes / 1024))} KB
+                  </span>
                   <button
                     type="button"
-                    className="btn btn--danger"
-                    onClick={() => void handleDeleteAttachment(attachment.id)}
+                    className="icon-button icon-button--xs icon-button--danger"
+                    aria-label={`Delete ${attachment.original_name}`}
+                    onClick={() => void removeAttachment(attachment)}
                   >
-                    Delete
+                    <TrashIcon size={13} />
                   </button>
                 </li>
               ))}
             </ul>
           )}
+          <label className={`dropzone ${uploading ? "is-busy" : ""}`}>
+            <input type="file" onChange={(event) => void upload(event)} disabled={uploading} />
+            {uploading ? <span className="spinner" aria-hidden="true" /> : <UploadIcon size={16} />}
+            <span>{uploading ? "Uploading…" : "Attach a file"}</span>
+            <span className="dropzone__hint">Up to 5 MB</span>
+          </label>
         </section>
 
-        {/* Activity */}
-        <section className="detail-section">
-          <div className="detail-section__header">
-            <div className="detail-section__title">Activity</div>
-            <div className="detail-section__count">{activity.length}</div>
+        <section className="detail__section detail__section--last">
+          <div className="tabs tabs--compact" role="tablist" aria-label="Conversation">
+            {[
+              { id: "comments", label: "Comments", count: commentCount },
+              { id: "activity", label: "Activity", count: activity.length },
+            ].map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === item.id}
+                className={`tabs__tab ${tab === item.id ? "is-active" : ""}`}
+                onClick={() => setTab(item.id)}
+              >
+                {item.label}
+                {item.count > 0 && <span className="tabs__count">{item.count}</span>}
+                {tab === item.id && (
+                  <motion.span
+                    layoutId="detail-tab"
+                    className="tabs__indicator"
+                    transition={{ type: "spring", stiffness: 520, damping: 40 }}
+                  />
+                )}
+              </button>
+            ))}
           </div>
-          {activity.length === 0 ? (
-            <div className="detail-section__empty">No activity yet.</div>
-          ) : (
-            <ul className="activity-list">
-              {activity.map((event) => (
-                <li key={event.id} className="activity-item">
-                  <span className="activity-item__bullet" aria-hidden />
-                  <div className="activity-item__content">
-                    <div className="activity-item__summary">{event.summary}</div>
-                    <div className="activity-item__meta">
-                      {event.actor?.username || "System"} · {formatDate(event.created_at)}
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        {/* Comments */}
-        <section className="detail-section">
-          <div className="detail-section__header">
-            <div className="detail-section__title">Comments</div>
+          <div hidden={tab !== "comments"}>
+            <CommentThread
+              bugId={bug.id}
+              auth={auth}
+              fetchWithAuth={fetchWithAuth}
+              mentionableUsers={catalog?.users || []}
+              onCountChange={setCommentCount}
+            />
           </div>
-          <CommentThread
-            bugId={bug.id}
-            auth={auth}
-            fetchWithAuth={fetchWithAuth}
-            mentionableUsers={catalog?.users || []}
-          />
+          {tab === "activity" &&
+            (activity.length === 0 ? (
+              <p className="section-empty">No activity recorded yet.</p>
+            ) : (
+              <ol className="timeline">
+                {activity.map((event) => (
+                  <li key={event.id} className="timeline__item">
+                    <span className="timeline__dot" aria-hidden="true" />
+                    <p className="timeline__text">
+                      <strong>{event.actor?.username || "System"}</strong> {event.summary}
+                    </p>
+                    <time className="timeline__time" dateTime={event.created_at} title={formatDate(event.created_at)}>
+                      {formatRelative(event.created_at)}
+                    </time>
+                  </li>
+                ))}
+              </ol>
+            ))}
         </section>
       </div>
-    </aside>
+
+      <AnimatePresence>
+        {editing && (
+          <motion.footer
+            key="savebar"
+            className="detail__savebar"
+            initial={{ y: "100%", opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: "100%", opacity: 0 }}
+            transition={{ type: "spring", stiffness: 480, damping: 40 }}
+          >
+            <span className="detail__savebar-note">{dirty ? "Unsaved changes" : "No changes yet"}</span>
+            <button type="button" className="btn btn--ghost" onClick={cancelEdit} disabled={saving}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn--primary" onClick={() => void handleSave()} disabled={saving || !dirty}>
+              {saving && <span className="spinner" aria-hidden="true" />}
+              {saving ? "Saving…" : "Save changes"}
+            </button>
+          </motion.footer>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

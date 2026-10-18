@@ -80,6 +80,19 @@ async def test_issue_watch_link_activity_and_notifications_flow(client):
         },
     )
 
+    member_resp = await client.post(
+        f"/projects/{project['id']}/members",
+        json={"username": teammate["username"], "role": "member"},
+        headers=owner["headers"],
+    )
+    assert member_resp.status_code == 201
+    viewer_resp = await client.post(
+        f"/projects/{project['id']}/members",
+        json={"username": observer["username"], "role": "viewer"},
+        headers=owner["headers"],
+    )
+    assert viewer_resp.status_code == 201
+
     assign_resp = await client.patch(
         f"/bugs/{primary_bug['id']}",
         json={
@@ -107,7 +120,7 @@ async def test_issue_watch_link_activity_and_notifications_flow(client):
     )
     assert link_resp.status_code == 201
 
-    detail_resp = await client.get(f"/bugs/{primary_bug['id']}")
+    detail_resp = await client.get(f"/bugs/{primary_bug['id']}", headers=owner["headers"])
     assert detail_resp.status_code == 200
     detail = detail_resp.json()
 
@@ -118,7 +131,10 @@ async def test_issue_watch_link_activity_and_notifications_flow(client):
     assert detail["watch_count"] >= 1
     assert any(link["bug"]["id"] == secondary_bug["id"] for link in detail["links"])
 
-    activity_resp = await client.get(f"/bugs/{primary_bug['id']}/activity?limit=20&offset=0")
+    activity_resp = await client.get(
+        f"/bugs/{primary_bug['id']}/activity?limit=20&offset=0",
+        headers=owner["headers"],
+    )
     assert activity_resp.status_code == 200
     activity_types = {item["event_type"] for item in activity_resp.json()["items"]}
     assert "issue_updated" in activity_types
@@ -151,6 +167,13 @@ async def test_comment_mentions_editing_and_attachment_flow(client):
         },
     )
 
+    member_resp = await client.post(
+        f"/projects/{project['id']}/members",
+        json={"username": teammate["username"], "role": "member"},
+        headers=owner["headers"],
+    )
+    assert member_resp.status_code == 201
+
     comment_resp = await client.post(
         f"/bugs/{bug['id']}/comments",
         json={"body": f"Please review this, @{owner['username']}"},
@@ -169,7 +192,10 @@ async def test_comment_mentions_editing_and_attachment_flow(client):
     assert edit_resp.status_code == 200
     assert edit_resp.json()["body"] == "Updated comment body"
 
-    comments_resp = await client.get(f"/bugs/{bug['id']}/comments?limit=20&offset=0")
+    comments_resp = await client.get(
+        f"/bugs/{bug['id']}/comments?limit=20&offset=0",
+        headers=owner["headers"],
+    )
     assert comments_resp.status_code == 200
     comments_payload = comments_resp.json()
     assert comments_payload["total"] == 1
@@ -197,12 +223,12 @@ async def test_comment_mentions_editing_and_attachment_flow(client):
     stored_files = [file_path for file_path in ATTACHMENTS_DIR.iterdir() if file_path.is_file()]
     assert len(stored_files) == 1
 
-    detail_resp = await client.get(f"/bugs/{bug['id']}")
+    detail_resp = await client.get(f"/bugs/{bug['id']}", headers=owner["headers"])
     assert detail_resp.status_code == 200
     detail = detail_resp.json()
     assert [item["id"] for item in detail["attachments"]] == [attachment["id"]]
 
-    download_resp = await client.get(attachment["download_url"])
+    download_resp = await client.get(attachment["download_url"], headers=owner["headers"])
     assert download_resp.status_code == 200
     assert download_resp.content == b"attachment-body"
 

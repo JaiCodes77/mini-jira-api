@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 from app import crud, models
 from app.auth import get_current_user
 from app.database import get_db
-from app.models import User
+from app.models import ProjectRole, User
+from app.permissions import ensure_project_role
 from app.schemas import (
     BugResponse,
     ComponentCreate,
@@ -16,6 +17,9 @@ from app.schemas import (
     LabelCreate,
     LabelResponse,
     LabelUpdate,
+    MemberCreate,
+    MemberResponse,
+    MemberUpdate,
     PaginatedResponse,
     ProjectCatalogResponse,
     ProjectCreate,
@@ -42,12 +46,14 @@ def _get_project_or_404(db: Session, project_id: int) -> models.Project:
     return project
 
 
-def _ensure_owner(project: models.Project, current_user: User):
-    if project.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the project owner can perform this action",
-        )
+def _get_visible_project(db: Session, project_id: int, current_user: User) -> models.Project:
+    project = _get_project_or_404(db, project_id)
+    ensure_project_role(db, project, current_user, ProjectRole.viewer)
+    return project
+
+
+def _ensure_owner(db: Session, project: models.Project, current_user: User):
+    ensure_project_role(db, project, current_user, ProjectRole.owner)
 
 
 def _ensure_unique_name(db: Session, model, project_id: int, name: str, *, exclude_id: int | None = None):
@@ -87,8 +93,9 @@ def list_projects(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    result = crud.get_projects(db=db, limit=limit, offset=offset)
+    result = crud.get_projects(db=db, user_id=current_user.id, limit=limit, offset=offset)
     return PaginatedResponse(
         items=result["items"],
         total=result["total"],
@@ -101,15 +108,18 @@ def list_projects(
 def get_project(
     project_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    return _get_project_or_404(db, project_id)
+    return _get_visible_project(db, project_id, current_user)
 
 
 @router.get("/{project_id}/catalog", response_model=ProjectCatalogResponse)
 def get_project_catalog(
     project_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
+    _get_visible_project(db, project_id, current_user)
     catalog = crud.get_project_catalog(db=db, project_id=project_id)
     if catalog is None:
         raise HTTPException(
@@ -127,7 +137,7 @@ def update_project(
     current_user: User = Depends(get_current_user),
 ):
     existing = _get_project_or_404(db, project_id)
-    _ensure_owner(existing, current_user)
+    _ensure_owner(db, existing, current_user)
     if project.key:
         duplicate = db.query(models.Project).filter(
             models.Project.key == project.key.upper(),
@@ -148,7 +158,7 @@ def delete_project(
     current_user: User = Depends(get_current_user),
 ):
     existing = _get_project_or_404(db, project_id)
-    _ensure_owner(existing, current_user)
+    _ensure_owner(db, existing, current_user)
     crud.delete_project(db=db, project_id=project_id)
     return None
 
@@ -159,9 +169,16 @@ def list_project_bugs(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    _get_project_or_404(db, project_id)
-    result = crud.get_bugs(db=db, project_id=project_id, limit=limit, offset=offset)
+    _get_visible_project(db, project_id, current_user)
+    result = crud.get_bugs(
+        db=db,
+        viewer=current_user,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+    )
     return PaginatedResponse(
         items=result["items"],
         total=result["total"],
@@ -171,8 +188,12 @@ def list_project_bugs(
 
 
 @router.get("/{project_id}/epics", response_model=list[EpicResponse])
-def list_epics(project_id: int, db: Session = Depends(get_db)):
-    _get_project_or_404(db, project_id)
+def list_epics(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_visible_project(db, project_id, current_user)
     return crud.list_epics(db=db, project_id=project_id)
 
 
@@ -184,7 +205,7 @@ def create_epic(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     _ensure_unique_name(db, models.Epic, project_id, epic.name)
     return crud.create_epic(db=db, project_id=project_id, epic_in=epic)
 
@@ -198,7 +219,7 @@ def update_epic(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_epic(db, epic_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Epic not found")
@@ -215,7 +236,7 @@ def delete_epic(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_epic(db, epic_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Epic not found")
@@ -224,8 +245,12 @@ def delete_epic(
 
 
 @router.get("/{project_id}/sprints", response_model=list[SprintResponse])
-def list_sprints(project_id: int, db: Session = Depends(get_db)):
-    _get_project_or_404(db, project_id)
+def list_sprints(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_visible_project(db, project_id, current_user)
     return crud.list_sprints(db=db, project_id=project_id)
 
 
@@ -237,7 +262,7 @@ def create_sprint(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     _ensure_unique_name(db, models.Sprint, project_id, sprint.name)
     return crud.create_sprint(db=db, project_id=project_id, sprint_in=sprint)
 
@@ -251,7 +276,7 @@ def update_sprint(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_sprint(db, sprint_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sprint not found")
@@ -268,7 +293,7 @@ def delete_sprint(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_sprint(db, sprint_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sprint not found")
@@ -277,8 +302,12 @@ def delete_sprint(
 
 
 @router.get("/{project_id}/labels", response_model=list[LabelResponse])
-def list_labels(project_id: int, db: Session = Depends(get_db)):
-    _get_project_or_404(db, project_id)
+def list_labels(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_visible_project(db, project_id, current_user)
     return crud.list_labels(db=db, project_id=project_id)
 
 
@@ -290,7 +319,7 @@ def create_label(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     _ensure_unique_name(db, models.Label, project_id, label.name)
     return crud.create_label(db=db, project_id=project_id, label_in=label)
 
@@ -304,7 +333,7 @@ def update_label(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_label(db, label_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Label not found")
@@ -321,7 +350,7 @@ def delete_label(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_label(db, label_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Label not found")
@@ -330,8 +359,12 @@ def delete_label(
 
 
 @router.get("/{project_id}/components", response_model=list[ComponentResponse])
-def list_components(project_id: int, db: Session = Depends(get_db)):
-    _get_project_or_404(db, project_id)
+def list_components(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_visible_project(db, project_id, current_user)
     return crud.list_components(db=db, project_id=project_id)
 
 
@@ -343,7 +376,7 @@ def create_component(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     _ensure_unique_name(db, models.Component, project_id, component.name)
     return crud.create_component(db=db, project_id=project_id, component_in=component)
 
@@ -357,7 +390,7 @@ def update_component(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_component(db, component_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Component not found")
@@ -374,7 +407,7 @@ def delete_component(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_component(db, component_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Component not found")
@@ -383,8 +416,12 @@ def delete_component(
 
 
 @router.get("/{project_id}/versions", response_model=list[VersionResponse])
-def list_versions(project_id: int, db: Session = Depends(get_db)):
-    _get_project_or_404(db, project_id)
+def list_versions(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_visible_project(db, project_id, current_user)
     return crud.list_versions(db=db, project_id=project_id)
 
 
@@ -396,7 +433,7 @@ def create_version(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     _ensure_unique_name(db, models.Version, project_id, version.name)
     return crud.create_version(db=db, project_id=project_id, version_in=version)
 
@@ -410,7 +447,7 @@ def update_version(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_version(db, version_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
@@ -427,9 +464,85 @@ def delete_version(
     current_user: User = Depends(get_current_user),
 ):
     project = _get_project_or_404(db, project_id)
-    _ensure_owner(project, current_user)
+    _ensure_owner(db, project, current_user)
     existing = crud.get_version(db, version_id)
     if existing is None or existing.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
     crud.delete_version(db=db, version=existing)
+    return None
+
+
+@router.get("/{project_id}/members", response_model=list[MemberResponse])
+def list_members(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = _get_visible_project(db, project_id, current_user)
+    return [crud.member_payload(member) for member in crud.list_project_members(db, project)]
+
+
+@router.post("/{project_id}/members", response_model=MemberResponse, status_code=status.HTTP_201_CREATED)
+def add_member(
+    project_id: int,
+    payload: MemberCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = _get_project_or_404(db, project_id)
+    _ensure_owner(db, project, current_user)
+    user = db.query(models.User).filter(models.User.username == payload.username).first()
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    try:
+        member = crud.add_project_member(
+            db,
+            project,
+            user,
+            models.ProjectRole(payload.role),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return crud.member_payload(member)
+
+
+@router.patch("/{project_id}/members/{user_id}", response_model=MemberResponse)
+def update_member(
+    project_id: int,
+    user_id: int,
+    payload: MemberUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = _get_project_or_404(db, project_id)
+    _ensure_owner(db, project, current_user)
+    try:
+        member = crud.update_project_member_role(
+            db,
+            project,
+            user_id,
+            models.ProjectRole(payload.role),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if member is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project member not found")
+    return crud.member_payload(member)
+
+
+@router.delete("/{project_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_member(
+    project_id: int,
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    project = _get_project_or_404(db, project_id)
+    _ensure_owner(db, project, current_user)
+    try:
+        removed = crud.remove_project_member(db, project, user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project member not found")
     return None

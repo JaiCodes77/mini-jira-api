@@ -1,7 +1,9 @@
+import { MotionConfig } from "framer-motion";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./AuthContext";
 import AuthPage from "./AuthPage";
 import Dashboard from "./Dashboard";
+import { ThemeProvider } from "./theme";
 import ToastContainer from "./Toasts";
 
 function RootRedirect() {
@@ -48,8 +50,12 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppRoutes />
-    </AuthProvider>
+    <ThemeProvider>
+      <MotionConfig reducedMotion="user">
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </MotionConfig>
+    </ThemeProvider>
   );
 }

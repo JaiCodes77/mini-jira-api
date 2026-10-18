@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app import models, schemas
+from app.permissions import membership_for, role_for, visible_project_ids
 from app.notifications import (
     create_notifications_for_users,
     extract_mentioned_users,
@@ -285,6 +286,7 @@ def get_bug(db: Session, bug_id: int, *, detail: bool = False) -> Optional[model
 def get_bugs(
     db: Session,
     *,
+    viewer: Optional[models.User] = None,
     status: Optional[models.BugStatus] = None,
     priority: Optional[models.BugPriority] = None,
     q: Optional[str] = None,
@@ -304,6 +306,21 @@ def get_bugs(
     offset: int = 0,
 ):
     query = _bug_query(db)
+
+    if viewer is not None:
+        visible_projects = visible_project_ids(db, viewer.id)
+        query = query.filter(
+            or_(
+                models.Bug.project_id.in_(visible_projects),
+                and_(
+                    models.Bug.project_id.is_(None),
+                    or_(
+                        models.Bug.reporter_id == viewer.id,
+                        models.Bug.assignee_id == viewer.id,
+                    ),
+                ),
+            )
+        )
 
     if label_id is not None:
         query = query.join(models.Bug.labels).filter(models.Label.id == label_id)
@@ -367,20 +384,65 @@ def get_bugs(
     return {"items": bugs, "total": total}
 
 
-def can_update_bug(user: models.User, bug: models.Bug) -> bool:
-    if bug.project is not None and bug.project.owner_id == user.id:
-        return True
+def summarize_bugs(
+    db: Session,
+    *,
+    viewer: models.User,
+    project_id: Optional[int] = None,
+) -> dict[str, int]:
+    query = db.query(models.Bug)
+    visible_projects = visible_project_ids(db, viewer.id)
+    query = query.filter(
+        or_(
+            models.Bug.project_id.in_(visible_projects),
+            and_(
+                models.Bug.project_id.is_(None),
+                or_(
+                    models.Bug.reporter_id == viewer.id,
+                    models.Bug.assignee_id == viewer.id,
+                ),
+            ),
+        )
+    )
+    if project_id is not None:
+        query = query.filter(models.Bug.project_id == project_id)
+
+    def _count(*criteria) -> int:
+        scoped = query
+        for criterion in criteria:
+            scoped = scoped.filter(criterion)
+        return scoped.count()
+
+    return {
+        "total": _count(),
+        "open": _count(models.Bug.status == models.BugStatus.open),
+        "in_progress": _count(models.Bug.status == models.BugStatus.in_progress),
+        "closed": _count(models.Bug.status == models.BugStatus.closed),
+        "high_priority": _count(models.Bug.priority == models.BugPriority.high),
+        "unassigned": _count(models.Bug.assignee_id.is_(None)),
+    }
+
+
+def can_update_bug(user: models.User, bug: models.Bug, db: Session | None = None) -> bool:
     if bug.reporter_id == user.id or bug.assignee_id == user.id:
         return True
-    return bug.project_id is None and bug.reporter_id is None
-
-
-def can_delete_bug(user: models.User, bug: models.Bug) -> bool:
     if bug.project is not None and bug.project.owner_id == user.id:
         return True
+    if db is not None and bug.project is not None:
+        role = role_for(db, bug.project, user)
+        if role in (models.ProjectRole.owner, models.ProjectRole.member):
+            return True
+    return False
+
+
+def can_delete_bug(user: models.User, bug: models.Bug, db: Session | None = None) -> bool:
     if bug.reporter_id == user.id:
         return True
-    return bug.project_id is None and bug.reporter_id is None
+    if bug.project is not None and bug.project.owner_id == user.id:
+        return True
+    if db is not None and bug.project is not None:
+        return role_for(db, bug.project, user) == models.ProjectRole.owner
+    return False
 
 
 def update_bug(db: Session, bug_id: int, bug_in: schemas.BugUpdate, actor_id: int) -> Optional[models.Bug]:
@@ -729,13 +791,26 @@ def create_project(db: Session, project_in: schemas.ProjectCreate, owner_id: int
         owner_id=owner_id,
     )
     db.add(project)
+    db.flush()
+    db.add(
+        models.ProjectMember(
+            project_id=project.id,
+            user_id=owner_id,
+            role=models.ProjectRole.owner,
+        )
+    )
     db.commit()
     db.refresh(project)
     return project
 
 
-def get_projects(db: Session, limit: int = 20, offset: int = 0):
-    query = db.query(models.Project).order_by(models.Project.created_at.desc())
+def get_projects(db: Session, user_id: int, limit: int = 20, offset: int = 0):
+    visible = visible_project_ids(db, user_id)
+    query = (
+        db.query(models.Project)
+        .filter(models.Project.id.in_(visible))
+        .order_by(models.Project.created_at.desc())
+    )
     total = query.count()
     projects = query.offset(offset).limit(limit).all()
     return {"items": projects, "total": total}
@@ -768,10 +843,105 @@ def delete_project(db: Session, project_id: int):
     return True
 
 
+def ensure_owner_membership(db: Session, project: models.Project) -> models.ProjectMember:
+    existing = membership_for(db, project.id, project.owner_id)
+    if existing is None:
+        existing = models.ProjectMember(
+            project_id=project.id,
+            user_id=project.owner_id,
+            role=models.ProjectRole.owner,
+        )
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+    elif existing.role != models.ProjectRole.owner:
+        existing.role = models.ProjectRole.owner
+        db.commit()
+        db.refresh(existing)
+    return existing
+
+
+def member_payload(member: models.ProjectMember) -> dict:
+    return {
+        "id": member.id,
+        "user_id": member.user_id,
+        "username": member.user.username,
+        "email": member.user.email,
+        "role": member.role,
+        "created_at": member.created_at,
+    }
+
+
+def list_project_members(db: Session, project: models.Project) -> list[models.ProjectMember]:
+    ensure_owner_membership(db, project)
+    return (
+        db.query(models.ProjectMember)
+        .options(joinedload(models.ProjectMember.user))
+        .filter(models.ProjectMember.project_id == project.id)
+        .order_by(models.ProjectMember.created_at.asc())
+        .all()
+    )
+
+
+def add_project_member(
+    db: Session,
+    project: models.Project,
+    user: models.User,
+    role: models.ProjectRole,
+) -> models.ProjectMember:
+    if user.id == project.owner_id:
+        raise ValueError("The project owner is already a member")
+    if membership_for(db, project.id, user.id) is not None:
+        raise ValueError("User is already a project member")
+    member = models.ProjectMember(project_id=project.id, user_id=user.id, role=role)
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+    return (
+        db.query(models.ProjectMember)
+        .options(joinedload(models.ProjectMember.user))
+        .filter(models.ProjectMember.id == member.id)
+        .one()
+    )
+
+
+def update_project_member_role(
+    db: Session,
+    project: models.Project,
+    user_id: int,
+    role: models.ProjectRole,
+) -> models.ProjectMember | None:
+    if user_id == project.owner_id:
+        raise ValueError("The project owner role cannot be changed")
+    member = membership_for(db, project.id, user_id)
+    if member is None:
+        return None
+    member.role = role
+    db.commit()
+    return (
+        db.query(models.ProjectMember)
+        .options(joinedload(models.ProjectMember.user))
+        .filter(models.ProjectMember.id == member.id)
+        .one()
+    )
+
+
+def remove_project_member(db: Session, project: models.Project, user_id: int) -> bool:
+    if user_id == project.owner_id:
+        raise ValueError("The project owner cannot be removed")
+    member = membership_for(db, project.id, user_id)
+    if member is None:
+        return False
+    db.delete(member)
+    db.commit()
+    return True
+
+
 def get_project_catalog(db: Session, project_id: int):
     project = get_project(db, project_id)
     if project is None:
         return None
+    members = list_project_members(db, project)
     return {
         "project": project,
         "epics": db.query(models.Epic).filter(models.Epic.project_id == project_id).order_by(models.Epic.name.asc()).all(),
@@ -779,7 +949,8 @@ def get_project_catalog(db: Session, project_id: int):
         "labels": db.query(models.Label).filter(models.Label.project_id == project_id).order_by(models.Label.name.asc()).all(),
         "components": db.query(models.Component).filter(models.Component.project_id == project_id).order_by(models.Component.name.asc()).all(),
         "versions": db.query(models.Version).filter(models.Version.project_id == project_id).order_by(models.Version.created_at.desc()).all(),
-        "users": db.query(models.User).filter(models.User.is_active.is_(True)).order_by(models.User.username.asc()).all(),
+        "users": [member.user for member in members if member.user is not None and member.user.is_active],
+        "members": [member_payload(member) for member in members],
     }
 
 
@@ -849,7 +1020,12 @@ def create_sprint(db: Session, project_id: int, sprint_in: schemas.SprintCreate)
 
 
 def update_sprint(db: Session, sprint: models.Sprint, sprint_in: schemas.SprintUpdate):
-    return _update_record(db, sprint, sprint_in.model_dump(exclude_unset=True))
+    payload = sprint_in.model_dump(exclude_unset=True)
+    start_at = payload.get("start_at", sprint.start_at)
+    end_at = payload.get("end_at", sprint.end_at)
+    if start_at and end_at and end_at < start_at:
+        raise ValueError("Sprint end date must be after the start date")
+    return _update_record(db, sprint, payload)
 
 
 def delete_sprint(db: Session, sprint: models.Sprint):
